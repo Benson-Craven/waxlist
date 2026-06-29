@@ -1,65 +1,74 @@
-import Image from "next/image";
+import { Button } from "@/components/ui/button";
+import { HOME_PAGE_COPY, SPOTIFY_AUTH_START_PATH } from "@/lib/constants";
+import {
+  LiquidGradientCanvas,
+  LIQUID_GRADIENT_PRESETS,
+} from "@/components/ui/liquid-gradient";
+
+function SpotifyLogo() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="size-5 shrink-0"
+      fill="#1DB954"
+    >
+      <path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0Zm5.5 17.3a.75.75 0 0 1-1.03.25c-2.82-1.72-6.38-2.11-10.57-1.16a.75.75 0 1 1-.33-1.46c4.59-1.05 8.53-.59 11.68 1.33.35.21.47.68.25 1.04Zm1.46-3.25a.94.94 0 0 1-1.29.31c-3.23-1.99-8.16-2.56-11.98-1.4a.94.94 0 0 1-.55-1.8c4.36-1.32 9.78-.68 13.5 1.61.45.27.59.85.32 1.28Zm.12-3.39C15.2 8.36 8.8 8.15 5.08 9.3a1.12 1.12 0 1 1-.66-2.15c4.27-1.31 11.34-1.06 15.81 1.59a1.12 1.12 0 0 1-1.15 1.92Z" />
+    </svg>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
+    <main className="relative min-h-screen overflow-hidden bg-black text-white">
+      <LiquidGradientCanvas
+        {...LIQUID_GRADIENT_PRESETS.sunset}
+        aria-hidden="true"
+        speed={0.35}
+        respectReducedMotion
+        pauseWhenOffscreen
+        pauseWhenHidden
+        className="absolute inset-0 h-full w-full"
+      />
+
+      <div className="absolute inset-0 bg-black/40" aria-hidden="true" />
+
+      <section
+        className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 text-center"
+        aria-labelledby="home-heading"
+      >
+        <p className="mb-5 text-xs uppercase tracking-[0.45em] text-white/60">
+          {HOME_PAGE_COPY.eyebrow}
+        </p>
+
+        <h1
+          id="home-heading"
+          className="font-serif text-7xl italic tracking-tight text-white sm:text-8xl md:text-9xl"
+        >
+          {HOME_PAGE_COPY.title}
+        </h1>
+
+        <p className="mt-6 max-w-xl text-balance text-base text-white/75 sm:text-lg">
+          {HOME_PAGE_COPY.tagline}
+        </p>
+
+        <Button
+          asChild
+          className="mt-10 cursor-pointer rounded-full px-8 py-6 text-base font-medium"
+        >
           <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            href={SPOTIFY_AUTH_START_PATH}
+            aria-label="Connect Spotify to start building your vinyl crate"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
+            <SpotifyLogo />
+            {HOME_PAGE_COPY.cta}
           </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        </Button>
+
+        <p className="mt-5 max-w-md text-balance text-xs leading-6 text-white/60 sm:text-sm">
+          {HOME_PAGE_COPY.privacy}
+        </p>
+      </section>
+    </main>
   );
 }
