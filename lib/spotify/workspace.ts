@@ -1,18 +1,18 @@
-import { getSpotifyOAuthEnv } from "@/lib/config";
+import { apiCacheKeys, getOrSetApiCache } from "@/lib/cache/api-cache";
+import { getSessionSecretEnv } from "@/lib/config";
 import {
   createDiscogsSearchUnits,
   type DiscogsSearchUnit,
 } from "@/lib/matching/discogs-search-units";
 import {
   decodeSpotifySession,
-  SPOTIFY_TOKEN_URL,
+  shouldRefreshSpotifySession,
   type SpotifySession,
 } from "@/lib/spotify/oauth";
 
 export type SpotifyProfile = {
   id: string;
   displayName: string | null;
-  email: string | null;
   country: string | null;
   product: string | null;
   uri: string;
@@ -100,18 +100,9 @@ export type SpotifyWorkspaceSnapshot = {
   totalPlaylists: number;
 };
 
-type SpotifyRefreshResponse = {
-  access_token?: string;
-  token_type?: string;
-  scope?: string;
-  expires_in?: number;
-  refresh_token?: string;
-};
-
 type SpotifyProfileResponse = {
   id: string;
   display_name?: string | null;
-  email?: string;
   country?: string;
   product?: string;
   uri: string;
@@ -270,6 +261,7 @@ type SpotifyArtistSearchResponse = {
 type SpotifyPlaylistDetailsResponse = {
   id: string;
   name?: string | null;
+  snapshot_id?: string;
   tracks?: {
     total?: number;
   };
@@ -289,50 +281,9 @@ export type SpotifyPlaylistSource = SpotifyPlaylistListResponse["items"][number]
 
 const MAX_IMPORT_TRACKS = 500;
 
-async function refreshSpotifySession(session: SpotifySession) {
-  if (!session.refreshToken) {
-    return null;
-  }
-
-  const env = getSpotifyOAuthEnv();
-
-  if (!env.ok) {
-    return null;
-  }
-
-  const response = await fetch(SPOTIFY_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(
-        `${env.clientId}:${env.clientSecret}`,
-      ).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: session.refreshToken,
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const payload = (await response.json()) as SpotifyRefreshResponse;
-
-  if (!payload.access_token || !payload.token_type || !payload.expires_in) {
-    return null;
-  }
-
-  return {
-    accessToken: payload.access_token,
-    refreshToken: payload.refresh_token ?? session.refreshToken,
-    expiresAt: Date.now() + payload.expires_in * 1000,
-    scope: payload.scope ?? session.scope,
-    tokenType: payload.token_type,
-  } satisfies SpotifySession;
-}
+type ImportSummaryCacheOptions = {
+  cacheTtlMs?: number;
+};
 
 async function fetchSpotifyJson<T>(path: string, session: SpotifySession) {
   const response = await fetch(`https://api.spotify.com/v1${path}`, {
@@ -428,7 +379,6 @@ function normalizeProfile(profile: SpotifyProfileResponse): SpotifyProfile {
   return {
     id: profile.id,
     displayName: profile.display_name ?? null,
-    email: profile.email ?? null,
     country: profile.country ?? null,
     product: profile.product ?? null,
     uri: profile.uri,
@@ -661,7 +611,7 @@ function createLowQualityReasons(input: {
   return reasons;
 }
 
-function buildPlaylistImportSummary(input: {
+export function buildPlaylistImportSummary(input: {
   sourceType: "playlist" | "album";
   playlistId: string;
   playlistName: string | null;
@@ -818,40 +768,46 @@ function buildPlaylistImportSummary(input: {
 export async function loadSpotifyPlaylistImportSummary(
   playlistId: string,
   session: SpotifySession,
+  options: ImportSummaryCacheOptions = {},
 ): Promise<SpotifyPlaylistImportSummary> {
   const playlistDetails =
     await fetchSpotifyJsonOrThrow<SpotifyPlaylistDetailsResponse>(
-    `/playlists/${playlistId}?fields=id,name,tracks(total)`,
-    session,
-  );
-  let offset = 0;
-  let total = playlistDetails?.tracks?.total ?? 0;
-  const rawTracks: SpotifyPlaylistTracksImportResponse["items"] = [];
-
-  do {
-    const tracksPage =
-      await fetchSpotifyJsonOrThrow<SpotifyPlaylistTracksImportResponse>(
-      `/playlists/${playlistId}/tracks?${new URLSearchParams({
-        limit: "100",
-        offset: offset.toString(),
-      })}`,
+      `/playlists/${playlistId}?fields=id,name,snapshot_id,tracks(total)`,
       session,
     );
+  const snapshotId = playlistDetails.snapshot_id ?? "unknown";
+  const cacheKey = apiCacheKeys.spotifyPlaylist(playlistId, snapshotId);
 
-    total = tracksPage.total;
-    rawTracks.push(...tracksPage.items);
-    offset += tracksPage.limit;
-  } while (offset < total && rawTracks.length < MAX_IMPORT_TRACKS);
+  return getOrSetApiCache(cacheKey, options.cacheTtlMs ?? 0, async () => {
+    let offset = 0;
+    let total = playlistDetails?.tracks?.total ?? 0;
+    const rawTracks: SpotifyPlaylistTracksImportResponse["items"] = [];
 
-  const artistImages = await loadSpotifyArtistImageMap(rawTracks, session);
+    do {
+      const tracksPage =
+        await fetchSpotifyJsonOrThrow<SpotifyPlaylistTracksImportResponse>(
+          `/playlists/${playlistId}/tracks?${new URLSearchParams({
+            limit: "100",
+            offset: offset.toString(),
+          })}`,
+          session,
+        );
 
-  return buildPlaylistImportSummary({
-    sourceType: "playlist",
-    playlistId,
-    playlistName: playlistDetails?.name ?? null,
-    playlistTrackTotal: total,
-    rawTracks,
-    artistImages,
+      total = tracksPage.total;
+      rawTracks.push(...tracksPage.items);
+      offset += tracksPage.limit;
+    } while (offset < total && rawTracks.length < MAX_IMPORT_TRACKS);
+
+    const artistImages = await loadSpotifyArtistImageMap(rawTracks, session);
+
+    return buildPlaylistImportSummary({
+      sourceType: "playlist",
+      playlistId,
+      playlistName: playlistDetails?.name ?? null,
+      playlistTrackTotal: total,
+      rawTracks,
+      artistImages,
+    });
   });
 }
 
@@ -883,63 +839,71 @@ export async function loadSpotifySavedAlbums(input: {
 export async function loadSpotifySavedAlbumImportSummary(
   albumId: string,
   session: SpotifySession,
+  options: ImportSummaryCacheOptions = {},
 ): Promise<SpotifyPlaylistImportSummary> {
-  const album = await fetchSpotifyJsonOrThrow<SpotifyAlbumDetailsResponse>(
-    `/albums/${albumId}`,
-    session,
+  return getOrSetApiCache(
+    apiCacheKeys.spotifyAlbum(albumId),
+    options.cacheTtlMs ?? 0,
+    async () => {
+      const album = await fetchSpotifyJsonOrThrow<SpotifyAlbumDetailsResponse>(
+        `/albums/${albumId}`,
+        session,
+      );
+      let offset = 0;
+      let total = album.tracks?.total ?? album.total_tracks ?? 0;
+      const rawTracks: SpotifyPlaylistTracksImportResponse["items"] = [];
+
+      do {
+        const trackPage =
+          await fetchSpotifyJsonOrThrow<SpotifyAlbumTracksResponse>(
+            `/albums/${albumId}/tracks?${new URLSearchParams({
+              limit: "50",
+              offset: offset.toString(),
+            })}`,
+            session,
+          );
+
+        total = trackPage.total;
+        rawTracks.push(
+          ...trackPage.items.map((track) => ({
+            track: {
+              id: track.id ?? null,
+              name: track.name,
+              type: track.type ?? "track",
+              is_local: false,
+              artists: album.artists?.length ? album.artists : track.artists,
+              external_urls: track.id
+                ? {
+                    spotify: `https://open.spotify.com/track/${track.id}`,
+                  }
+                : undefined,
+              album: {
+                id: album.id,
+                name: album.name,
+                album_type: album.album_type,
+                release_date: album.release_date,
+                external_urls: album.external_urls,
+                images: album.images,
+                artists: album.artists,
+              },
+            },
+          })),
+        );
+        offset += trackPage.limit;
+      } while (offset < total && rawTracks.length < MAX_IMPORT_TRACKS);
+
+      const artistImages = await loadSpotifyArtistImageMap(rawTracks, session);
+
+      return buildPlaylistImportSummary({
+        sourceType: "album",
+        playlistId: album.id,
+        playlistName: album.name,
+        playlistTrackTotal: total,
+        rawTracks,
+        artistImages,
+      });
+    },
   );
-  let offset = 0;
-  let total = album.tracks?.total ?? album.total_tracks ?? 0;
-  const rawTracks: SpotifyPlaylistTracksImportResponse["items"] = [];
-
-  do {
-    const trackPage = await fetchSpotifyJsonOrThrow<SpotifyAlbumTracksResponse>(
-      `/albums/${albumId}/tracks?${new URLSearchParams({
-        limit: "50",
-        offset: offset.toString(),
-      })}`,
-      session,
-    );
-
-    total = trackPage.total;
-    rawTracks.push(
-      ...trackPage.items.map((track) => ({
-        track: {
-          id: track.id ?? null,
-          name: track.name,
-          type: track.type ?? "track",
-          is_local: false,
-          artists: album.artists?.length ? album.artists : track.artists,
-          external_urls: track.id
-            ? {
-                spotify: `https://open.spotify.com/track/${track.id}`,
-              }
-            : undefined,
-          album: {
-            id: album.id,
-            name: album.name,
-            album_type: album.album_type,
-            release_date: album.release_date,
-            external_urls: album.external_urls,
-            images: album.images,
-            artists: album.artists,
-          },
-        },
-      })),
-    );
-    offset += trackPage.limit;
-  } while (offset < total && rawTracks.length < MAX_IMPORT_TRACKS);
-
-  const artistImages = await loadSpotifyArtistImageMap(rawTracks, session);
-
-  return buildPlaylistImportSummary({
-    sourceType: "album",
-    playlistId: album.id,
-    playlistName: album.name,
-    playlistTrackTotal: total,
-    rawTracks,
-    artistImages,
-  });
 }
 
 export async function loadSpotifyWorkspaceSnapshot(
@@ -949,28 +913,32 @@ export async function loadSpotifyWorkspaceSnapshot(
     return null;
   }
 
-  const session = decodeSpotifySession(sessionCookieValue);
+  const sessionSecret = getSessionSecretEnv();
+
+  if (!sessionSecret.ok) {
+    return null;
+  }
+
+  const session = decodeSpotifySession(
+    sessionCookieValue,
+    sessionSecret.secret,
+  );
 
   if (!session) {
     return null;
   }
 
-  const effectiveSession =
-    session.expiresAt <= Date.now() + 60 * 1000
-      ? await refreshSpotifySession(session)
-      : session;
-
-  if (!effectiveSession) {
+  if (shouldRefreshSpotifySession(session)) {
     return null;
   }
 
   const [profilePayload, playlistPayload] = await Promise.all([
-    fetchSpotifyJson<SpotifyProfileResponse>("/me", effectiveSession),
+    fetchSpotifyJson<SpotifyProfileResponse>("/me", session),
     fetchSpotifyJson<SpotifyPlaylistListResponse>(
       "/me/playlists?limit=12",
-      effectiveSession,
+      session,
     ),
-  ]);
+  ]).catch(() => [null, null] as const);
 
   if (!profilePayload || !playlistPayload) {
     return null;
@@ -978,7 +946,7 @@ export async function loadSpotifyWorkspaceSnapshot(
 
   return {
     profile: normalizeProfile(profilePayload),
-    playlists: await normalizeSpotifyPlaylists(playlistPayload, effectiveSession),
+    playlists: await normalizeSpotifyPlaylists(playlistPayload, session),
     totalPlaylists: playlistPayload.total,
   };
 }

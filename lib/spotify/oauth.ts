@@ -3,9 +3,20 @@ import {
   SPOTIFY_OAUTH_STATE_COOKIE,
   SPOTIFY_SESSION_COOKIE,
 } from "@/lib/constants";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 
 export const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 export const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
+export const SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+export const SPOTIFY_SESSION_REFRESH_SKEW_MS = 60 * 1000;
+
+const SPOTIFY_SESSION_COOKIE_VERSION = "v1";
+const SPOTIFY_SESSION_IV_BYTES = 12;
 
 export type SpotifySession = {
   accessToken: string;
@@ -26,6 +37,10 @@ export function createSpotifyOAuthState() {
   return crypto.randomUUID().replaceAll("-", "");
 }
 
+export function shouldRefreshSpotifySession(session: SpotifySession) {
+  return session.expiresAt <= Date.now() + SPOTIFY_SESSION_REFRESH_SKEW_MS;
+}
+
 export function buildSpotifyAuthorizeUrl(input: {
   clientId: string;
   redirectUri: string;
@@ -43,13 +58,20 @@ export function buildSpotifyAuthorizeUrl(input: {
   return authorizeUrl;
 }
 
-export function encodeSpotifySession(input: {
-  accessToken: string;
-  refreshToken?: string;
-  expiresIn: number;
-  scope?: string;
-  tokenType: string;
-}) {
+function getSessionEncryptionKey(secret: string) {
+  return createHash("sha256").update(secret, "utf8").digest();
+}
+
+export function encodeSpotifySession(
+  input: {
+    accessToken: string;
+    refreshToken?: string;
+    expiresIn: number;
+    scope?: string;
+    tokenType: string;
+  },
+  secret: string,
+) {
   const payload = {
     accessToken: input.accessToken,
     refreshToken: input.refreshToken,
@@ -57,14 +79,57 @@ export function encodeSpotifySession(input: {
     scope: input.scope,
     tokenType: input.tokenType,
   };
+  const iv = randomBytes(SPOTIFY_SESSION_IV_BYTES);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    getSessionEncryptionKey(secret),
+    iv,
+  );
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
 
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return [
+    SPOTIFY_SESSION_COOKIE_VERSION,
+    iv.toString("base64url"),
+    authTag.toString("base64url"),
+    ciphertext.toString("base64url"),
+  ].join(".");
 }
 
-export function decodeSpotifySession(value: string): SpotifySession | undefined {
+export function decodeSpotifySession(
+  value: string,
+  secret: string,
+): SpotifySession | undefined {
   try {
+    const [version, encodedIv, encodedAuthTag, encodedCiphertext] =
+      value.split(".");
+
+    if (
+      version !== SPOTIFY_SESSION_COOKIE_VERSION ||
+      !encodedIv ||
+      !encodedAuthTag ||
+      !encodedCiphertext
+    ) {
+      return;
+    }
+
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      getSessionEncryptionKey(secret),
+      Buffer.from(encodedIv, "base64url"),
+    );
+
+    decipher.setAuthTag(Buffer.from(encodedAuthTag, "base64url"));
+
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encodedCiphertext, "base64url")),
+      decipher.final(),
+    ]);
     const payload = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
+      decrypted.toString("utf8"),
     ) as Partial<SpotifySession>;
 
     if (

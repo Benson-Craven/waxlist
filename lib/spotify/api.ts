@@ -1,8 +1,10 @@
-import { getSpotifyOAuthEnv } from "@/lib/config";
+import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
   decodeSpotifySession,
   encodeSpotifySession,
   getSpotifyCookieNames,
+  SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
+  shouldRefreshSpotifySession,
   spotifyCookieOptions,
   SPOTIFY_TOKEN_URL,
   type SpotifySession,
@@ -10,8 +12,6 @@ import {
 import { type NextRequest, NextResponse } from "next/server";
 
 const SPOTIFY_API_URL = "https://api.spotify.com/v1";
-const SESSION_REFRESH_SKEW_MS = 60 * 1000;
-
 type SpotifyRefreshResponse = {
   access_token?: string;
   token_type?: string;
@@ -57,10 +57,6 @@ function jsonError(
   );
 }
 
-function shouldRefreshSession(session: SpotifySession) {
-  return session.expiresAt <= Date.now() + SESSION_REFRESH_SKEW_MS;
-}
-
 async function refreshSpotifySession(
   session: SpotifySession,
 ): Promise<SpotifyAuthorizedRequest> {
@@ -76,6 +72,7 @@ async function refreshSpotifySession(
   }
 
   const env = getSpotifyOAuthEnv();
+  const sessionSecret = getSessionSecretEnv();
 
   if (!env.ok) {
     return {
@@ -83,6 +80,20 @@ async function refreshSpotifySession(
       response: jsonError(500, "spotify_configuration_error", env.message, {
         missing: env.missing,
       }),
+    };
+  }
+
+  if (!sessionSecret.ok) {
+    return {
+      ok: false,
+      response: jsonError(
+        500,
+        "spotify_session_configuration_error",
+        sessionSecret.message,
+        {
+          missing: sessionSecret.missing,
+        },
+      ),
     };
   }
 
@@ -130,16 +141,19 @@ async function refreshSpotifySession(
 
   response.cookies.set(
     getSpotifyCookieNames().session,
-    encodeSpotifySession({
-      accessToken: refreshedSession.accessToken,
-      refreshToken: refreshedSession.refreshToken,
-      expiresIn: tokenPayload.expires_in,
-      scope: refreshedSession.scope,
-      tokenType: refreshedSession.tokenType,
-    }),
+    encodeSpotifySession(
+      {
+        accessToken: refreshedSession.accessToken,
+        refreshToken: refreshedSession.refreshToken,
+        expiresIn: tokenPayload.expires_in,
+        scope: refreshedSession.scope,
+        tokenType: refreshedSession.tokenType,
+      },
+      sessionSecret.secret,
+    ),
     {
       ...spotifyCookieOptions,
-      maxAge: tokenPayload.expires_in,
+      maxAge: SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
     },
   );
 
@@ -154,6 +168,7 @@ export async function getSpotifyAuthorizedRequest(
   request: NextRequest,
 ): Promise<SpotifyAuthorizedRequest> {
   const env = getSpotifyOAuthEnv();
+  const sessionSecret = getSessionSecretEnv();
 
   if (!env.ok) {
     return {
@@ -161,6 +176,20 @@ export async function getSpotifyAuthorizedRequest(
       response: jsonError(500, "spotify_configuration_error", env.message, {
         missing: env.missing,
       }),
+    };
+  }
+
+  if (!sessionSecret.ok) {
+    return {
+      ok: false,
+      response: jsonError(
+        500,
+        "spotify_session_configuration_error",
+        sessionSecret.message,
+        {
+          missing: sessionSecret.missing,
+        },
+      ),
     };
   }
 
@@ -177,7 +206,10 @@ export async function getSpotifyAuthorizedRequest(
     };
   }
 
-  const session = decodeSpotifySession(sessionCookie.value);
+  const session = decodeSpotifySession(
+    sessionCookie.value,
+    sessionSecret.secret,
+  );
 
   if (!session) {
     return {
@@ -190,7 +222,7 @@ export async function getSpotifyAuthorizedRequest(
     };
   }
 
-  if (shouldRefreshSession(session)) {
+  if (shouldRefreshSpotifySession(session)) {
     return refreshSpotifySession(session);
   }
 
@@ -234,14 +266,18 @@ export function spotifyApiErrorResponse(
       ? (payload.error as { message?: unknown })
       : undefined;
   const message =
-    typeof spotifyError?.message === "string"
+    status === 401
+      ? "Spotify session expired or was revoked. Connect Spotify again."
+      : typeof spotifyError?.message === "string"
       ? spotifyError.message
       : fallbackMessage;
+  const code =
+    status === 401 ? "spotify_session_expired" : "spotify_api_error";
 
   const response = NextResponse.json(
     {
       error: {
-        code: "spotify_api_error",
+        code,
         message,
       },
     },

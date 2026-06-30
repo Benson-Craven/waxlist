@@ -4,6 +4,7 @@ import {
   getSpotifyAuthorizedRequest,
   spotifyApiErrorResponse,
 } from "@/lib/spotify/api";
+import { getApiCacheEnv } from "@/lib/config";
 import { SPOTIFY_OAUTH_SCOPES } from "@/lib/constants";
 import {
   loadSpotifyPlaylistImportSummary,
@@ -90,6 +91,21 @@ export async function GET(request: NextRequest) {
   const playlistId = request.nextUrl.searchParams.get("playlistId");
 
   if (playlistId) {
+    const cacheEnv = getApiCacheEnv();
+
+    if (!cacheEnv.ok) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "cache_configuration_error",
+            message: cacheEnv.message,
+            missing: cacheEnv.missing,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
     if (!isSpotifyId(playlistId)) {
       return NextResponse.json(
         {
@@ -106,6 +122,7 @@ export async function GET(request: NextRequest) {
       const importSummary = await loadSpotifyPlaylistImportSummary(
         playlistId,
         authorized.session,
+        { cacheTtlMs: cacheEnv.ttlMs },
       );
       const response = NextResponse.json({ importSummary });
 

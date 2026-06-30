@@ -3,6 +3,7 @@ import {
   getSpotifyAuthorizedRequest,
   spotifyApiErrorResponse,
 } from "@/lib/spotify/api";
+import { getApiCacheEnv } from "@/lib/config";
 import { SPOTIFY_OAUTH_SCOPES } from "@/lib/constants";
 import {
   loadSpotifySavedAlbumImportSummary,
@@ -55,6 +56,21 @@ export async function GET(request: NextRequest) {
   const albumId = request.nextUrl.searchParams.get("albumId");
 
   if (albumId) {
+    const cacheEnv = getApiCacheEnv();
+
+    if (!cacheEnv.ok) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "cache_configuration_error",
+            message: cacheEnv.message,
+            missing: cacheEnv.missing,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
     if (!isSpotifyId(albumId)) {
       return NextResponse.json(
         {
@@ -71,6 +87,7 @@ export async function GET(request: NextRequest) {
       const importSummary = await loadSpotifySavedAlbumImportSummary(
         albumId,
         authorized.session,
+        { cacheTtlMs: cacheEnv.ttlMs },
       );
       const response = NextResponse.json({ importSummary });
 

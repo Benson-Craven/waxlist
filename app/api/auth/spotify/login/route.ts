@@ -1,4 +1,4 @@
-import { getSpotifyOAuthEnv } from "@/lib/config";
+import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
   buildSpotifyAuthorizeUrl,
   createSpotifyOAuthState,
@@ -31,9 +31,14 @@ function redirectToOAuthOrigin(request: NextRequest, redirectUri: string) {
 
 export async function GET(request: NextRequest) {
   const env = getSpotifyOAuthEnv();
+  const sessionSecret = getSessionSecretEnv();
 
   if (!env.ok) {
     return redirectWithConfigurationError(request, env.missing);
+  }
+
+  if (!sessionSecret.ok) {
+    return redirectWithConfigurationError(request, sessionSecret.missing);
   }
 
   const canonicalRedirect = redirectToOAuthOrigin(request, env.redirectUri);

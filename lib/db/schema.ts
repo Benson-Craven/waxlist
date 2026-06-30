@@ -1,0 +1,146 @@
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    spotifyUserId: text("spotify_user_id").notNull(),
+    displayName: text("display_name"),
+    imageUrl: text("image_url"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [uniqueIndex("users_spotify_user_id_idx").on(table.spotifyUserId)],
+);
+
+export const spotifyAccounts = pgTable(
+  "spotify_accounts",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    spotifyUserId: text("spotify_user_id").notNull(),
+    accessTokenEncrypted: text("access_token_encrypted"),
+    refreshTokenEncrypted: text("refresh_token_encrypted"),
+    scope: text("scope"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.userId],
+      name: "spotify_accounts_user_id_pk",
+    }),
+    uniqueIndex("spotify_accounts_spotify_user_id_idx").on(table.spotifyUserId),
+  ],
+);
+
+export const apiCache = pgTable(
+  "api_cache",
+  {
+    key: text("key").primaryKey(),
+    value: jsonb("value").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("api_cache_expires_at_idx").on(table.expiresAt)],
+);
+
+export const spotifyImports = pgTable(
+  "spotify_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    sourceType: text("source_type").notNull(),
+    sourceId: text("source_id").notNull(),
+    snapshotId: text("snapshot_id"),
+    summary: jsonb("summary").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("spotify_imports_user_id_idx").on(table.userId),
+    index("spotify_imports_source_idx").on(table.sourceType, table.sourceId),
+  ],
+);
+
+export const discogsMatches = pgTable(
+  "discogs_matches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    importId: uuid("import_id").references(() => spotifyImports.id, {
+      onDelete: "set null",
+    }),
+    sourceKey: text("source_key").notNull(),
+    normalizedArtist: text("normalized_artist").notNull(),
+    normalizedAlbum: text("normalized_album").notNull(),
+    discogsReleaseId: integer("discogs_release_id"),
+    confidence: integer("confidence").notNull(),
+    recommendationScore: integer("recommendation_score").notNull(),
+    matchPayload: jsonb("match_payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("discogs_matches_import_id_idx").on(table.importId),
+    index("discogs_matches_source_key_idx").on(table.sourceKey),
+    index("discogs_matches_release_id_idx").on(table.discogsReleaseId),
+  ],
+);
+
+export const wishlistItems = pgTable(
+  "wishlist_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    sessionIdHash: text("session_id_hash"),
+    recordKey: text("record_key").notNull(),
+    spotifyAlbum: text("spotify_album").notNull(),
+    spotifyArtist: text("spotify_artist").notNull(),
+    discogsTitle: text("discogs_title").notNull(),
+    discogsArtist: text("discogs_artist").notNull(),
+    discogsUrl: text("discogs_url"),
+    recordPayload: jsonb("record_payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("wishlist_items_user_id_idx").on(table.userId),
+    index("wishlist_items_session_id_hash_idx").on(table.sessionIdHash),
+    uniqueIndex("wishlist_items_user_record_idx").on(
+      table.userId,
+      table.recordKey,
+    ),
+    uniqueIndex("wishlist_items_session_record_idx").on(
+      table.sessionIdHash,
+      table.recordKey,
+    ),
+  ],
+);

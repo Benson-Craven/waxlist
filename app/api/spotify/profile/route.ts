@@ -11,7 +11,6 @@ export const runtime = "nodejs";
 type SpotifyProfileResponse = {
   id: string;
   display_name?: string | null;
-  email?: string;
   country?: string;
   product?: string;
   uri: string;
@@ -51,7 +50,6 @@ export async function GET(request: NextRequest) {
     profile: {
       id: profile.id,
       displayName: profile.display_name ?? null,
-      email: profile.email ?? null,
       country: profile.country ?? null,
       product: profile.product ?? null,
       uri: profile.uri,

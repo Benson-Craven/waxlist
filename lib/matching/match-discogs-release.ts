@@ -34,6 +34,8 @@ export type DiscogsMatchResult = {
   rateLimit: DiscogsSearchResult["rateLimit"];
 };
 
+export const RELIABLE_MATCH_CONFIDENCE = 75;
+
 function confidenceLabel(score: number) {
   if (score >= 90) {
     return "Very strong match";
@@ -366,7 +368,9 @@ export function rankDiscogsSearchResult(
   return {
     searchUnit: result.searchUnit,
     matches,
-    bestMatch: matches.find((match) => match.confidence >= 60) ?? null,
+    bestMatch:
+      matches.find((match) => match.confidence >= RELIABLE_MATCH_CONFIDENCE) ??
+      null,
     rateLimit: result.rateLimit,
   };
 }

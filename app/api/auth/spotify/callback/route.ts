@@ -1,7 +1,8 @@
-import { getSpotifyOAuthEnv } from "@/lib/config";
+import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
   encodeSpotifySession,
   getSpotifyCookieNames,
+  SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
   SPOTIFY_TOKEN_URL,
   spotifyCookieOptions,
 } from "@/lib/spotify/oauth";
@@ -41,11 +42,22 @@ function redirectWithOAuthError(request: NextRequest, reason: string) {
 
 export async function GET(request: NextRequest) {
   const env = getSpotifyOAuthEnv();
+  const sessionSecret = getSessionSecretEnv();
 
   if (!env.ok) {
     const response = redirectHome(request, "configuration_error");
     response.cookies.delete(getSpotifyCookieNames().state);
     response.headers.set("x-waxlist-spotify-oauth-error", "configuration_error");
+    return response;
+  }
+
+  if (!sessionSecret.ok) {
+    const response = redirectHome(request, "configuration_error");
+    response.cookies.delete(getSpotifyCookieNames().state);
+    response.headers.set(
+      "x-waxlist-spotify-oauth-error",
+      "session_configuration_error",
+    );
     return response;
   }
 
@@ -98,16 +110,19 @@ export async function GET(request: NextRequest) {
   response.cookies.delete(getSpotifyCookieNames().state);
   response.cookies.set(
     getSpotifyCookieNames().session,
-    encodeSpotifySession({
-      accessToken: tokenPayload.access_token,
-      refreshToken: tokenPayload.refresh_token,
-      expiresIn: tokenPayload.expires_in,
-      scope: tokenPayload.scope,
-      tokenType: tokenPayload.token_type,
-    }),
+    encodeSpotifySession(
+      {
+        accessToken: tokenPayload.access_token,
+        refreshToken: tokenPayload.refresh_token,
+        expiresIn: tokenPayload.expires_in,
+        scope: tokenPayload.scope,
+        tokenType: tokenPayload.token_type,
+      },
+      sessionSecret.secret,
+    ),
     {
       ...spotifyCookieOptions,
-      maxAge: tokenPayload.expires_in,
+      maxAge: SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
     },
   );
 

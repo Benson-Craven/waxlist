@@ -4,6 +4,8 @@ export const SPOTIFY_AUTH_START_PATH = "/api/auth/spotify/login";
 
 export const SPOTIFY_AUTH_LOGOUT_PATH = "/api/auth/spotify/logout";
 
+export const SPOTIFY_AUTH_REFRESH_PATH = "/api/auth/spotify/refresh";
+
 export const SPOTIFY_CALLBACK_PATH = "/api/auth/spotify/callback";
 
 export const SPOTIFY_OAUTH_STATE_COOKIE = "waxlist_spotify_oauth_state";
@@ -23,4 +25,6 @@ export const HOME_PAGE_COPY = {
   cta: "Connect Spotify",
   privacy:
     "We only use your Spotify data to build your crate. You can disconnect anytime.",
+  privacyLinkLabel: "Privacy",
+  deletionLinkLabel: "Data deletion",
 } as const;

@@ -43,9 +43,26 @@ import type {
   SpotifySavedAlbum,
   SpotifyWorkspaceSnapshot,
 } from "@/lib/spotify/workspace";
-import type { DiscogsMatchResult } from "@/lib/matching/match-discogs-release";
+import type {
+  DiscogsRateLimit,
+  StructuredDiscogsError,
+} from "@/lib/discogs/client";
+import type {
+  DiscogsMatchResult,
+  RankedDiscogsMatch,
+} from "@/lib/matching/match-discogs-release";
+import {
+  normalizeWishlistRecord,
+  type WishlistRecord,
+} from "@/lib/wishlist/record";
 
-type EndpointErrorPayload = { error?: { message?: string } };
+type EndpointErrorPayload = {
+  error?: {
+    code?: string;
+    message?: string;
+    missing?: string[];
+  };
+};
 type SpotifyProfilePayload = { profile: SpotifyProfile };
 type SpotifyPlaylistPayload = {
   playlists: SpotifyPlaylist[];
@@ -69,10 +86,13 @@ type DiscogsMatchPayload = {
     searchedUnits: number;
     skippedUnits: number;
     maxSearchUnits: number;
+    requestDelayMs: number;
+    stoppedForRateLimit: boolean;
+    rateLimit: DiscogsRateLimit;
     results: DiscogsMatchResult[];
     failures: Array<{
       searchUnit: DiscogsMatchResult["searchUnit"];
-      message: string;
+      error: StructuredDiscogsError;
     }>;
   };
 };
@@ -80,26 +100,14 @@ type VinylCrateRecord = {
   result: DiscogsMatchResult;
   match: NonNullable<DiscogsMatchResult["bestMatch"]>;
 };
-type WishlistRecord = {
-  id: string;
-  savedAt: string;
-  spotifyAlbum: string;
-  spotifyArtist: string;
-  spotifyAlbumId: string | null;
-  spotifyAlbumUrl: string | null;
-  discogsReleaseId: number;
-  discogsTitle: string;
-  discogsUri: string | null;
-  thumb: string | null;
-  format: string[];
-  year: number | null;
-  country: string | null;
-  recommendationScore: number;
-  confidence: number;
-  availabilityLabel: string;
-  priceLabel: string;
-  sourceTrackCount: number;
+type DiscogsReviewItem = {
+  result: DiscogsMatchResult;
+  match: RankedDiscogsMatch | null;
+  status: "possible" | "weak" | "none";
+  reason: string;
 };
+type WishlistPayload = { records: WishlistRecord[] };
+type WishlistSavePayload = { record: WishlistRecord };
 type CrateSortKey =
   | "recommendation"
   | "confidence"
@@ -114,6 +122,25 @@ const WISHLIST_STORAGE_KEY = "waxlist:wishlist:v1";
 const WISHLIST_CHANGED_EVENT = "waxlist:wishlist-changed";
 const ALBUM_SEARCH_STORAGE_KEY = "waxlist:saved-album-search:v1";
 const IMPORT_DIALOG_ANIMATION_MS = 220;
+
+class EndpointRequestError extends Error {
+  code: string | null;
+  missing: string[];
+  status: number;
+
+  constructor(input: {
+    message: string;
+    status: number;
+    code?: string;
+    missing?: string[];
+  }) {
+    super(input.message);
+    this.name = "EndpointRequestError";
+    this.status = input.status;
+    this.code = input.code ?? null;
+    this.missing = input.missing ?? [];
+  }
+}
 
 function useHasMounted() {
   return useSyncExternalStore(
@@ -162,12 +189,29 @@ async function fetchJson<T>(path: string, init?: RequestInit) {
   }
 
   if (!response.ok) {
-    throw new Error(
-      payload.error?.message ?? "Spotify data could not be loaded.",
-    );
+    throw new EndpointRequestError({
+      message: payload.error?.message ?? "Spotify data could not be loaded.",
+      status: response.status,
+      code: payload.error?.code,
+      missing: payload.error?.missing,
+    });
   }
 
   return payload;
+}
+
+function isSpotifyReconnectMessage(message: string) {
+  return (
+    message.includes("Connect Spotify again") ||
+    message.includes("Reconnect Spotify")
+  );
+}
+
+function getDiscogsConfigurationMessage(error: EndpointRequestError) {
+  const missingLabel =
+    error.missing.length > 0 ? ` Missing: ${error.missing.join(", ")}.` : "";
+
+  return `${error.message}${missingLabel} Add the missing Discogs values to .env.local, restart the dev server, then retry matching.`;
 }
 
 function getCrateRecordId(record: VinylCrateRecord) {
@@ -187,6 +231,78 @@ function getCrateRecords(payload: DiscogsMatchPayload) {
     .filter((record): record is VinylCrateRecord => Boolean(record));
 }
 
+function getDiscogsReviewItems(payload: DiscogsMatchPayload) {
+  return payload.matchRun.results
+    .filter((result) => !result.bestMatch)
+    .map((result) => {
+      const reviewMatch = result.matches[0] ?? null;
+
+      if (!reviewMatch) {
+        return {
+          result,
+          match: null,
+          status: "none" as const,
+          reason:
+            "Discogs did not return a vinyl candidate for this album search.",
+        };
+      }
+
+      if (reviewMatch.confidence >= 60) {
+        return {
+          result,
+          match: reviewMatch,
+          status: "possible" as const,
+          reason:
+            "Best candidate is a possible match, but confidence is below the strong recommendation threshold.",
+        };
+      }
+
+      return {
+        result,
+        match: reviewMatch,
+        status: "weak" as const,
+        reason:
+          "Best candidate is weak and needs manual title, artist, and format review before treating it as a match.",
+      };
+    });
+}
+
+function formatRetryDelay(seconds: number) {
+  if (seconds < 60) {
+    return `${seconds.toLocaleString()} seconds`;
+  }
+
+  const minutes = Math.ceil(seconds / 60);
+
+  return `${minutes.toLocaleString()} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+function getRateLimitLabel(rateLimit: DiscogsRateLimit) {
+  if (
+    rateLimit.limit === null &&
+    rateLimit.used === null &&
+    rateLimit.remaining === null
+  ) {
+    return "Discogs rate-limit status was not returned.";
+  }
+
+  const parts = [
+    rateLimit.remaining !== null
+      ? `${rateLimit.remaining.toLocaleString()} remaining`
+      : null,
+    rateLimit.used !== null ? `${rateLimit.used.toLocaleString()} used` : null,
+    rateLimit.limit !== null ? `${rateLimit.limit.toLocaleString()} limit` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return `Discogs rate limit: ${parts.join(" / ")}.`;
+}
+
+function getDiscogsArtistFromTitle(title: string, fallback: string) {
+  const [artistPart] = title.split(/\s+-\s+/, 1);
+
+  return artistPart?.trim() || fallback;
+}
+
 function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
   return {
     id: getCrateRecordId(record),
@@ -197,6 +313,10 @@ function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
     spotifyAlbumUrl: record.result.searchUnit.spotifyAlbumUrl,
     discogsReleaseId: record.match.id,
     discogsTitle: record.match.title,
+    discogsArtist: getDiscogsArtistFromTitle(
+      record.match.title,
+      record.result.searchUnit.artist,
+    ),
     discogsUri: record.match.uri,
     thumb: record.match.thumb,
     format: record.match.format,
@@ -208,23 +328,6 @@ function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
     priceLabel: record.match.priceHint.label,
     sourceTrackCount: record.result.searchUnit.sourceTrackCount,
   };
-}
-
-function isWishlistRecord(value: unknown): value is WishlistRecord {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const record = value as Partial<WishlistRecord>;
-
-  return (
-    typeof record.id === "string" &&
-    typeof record.savedAt === "string" &&
-    typeof record.spotifyAlbum === "string" &&
-    typeof record.spotifyArtist === "string" &&
-    typeof record.discogsReleaseId === "number" &&
-    typeof record.discogsTitle === "string"
-  );
 }
 
 function readWishlistRecords() {
@@ -241,7 +344,9 @@ function readWishlistRecords() {
       return [];
     }
 
-    return parsed.filter(isWishlistRecord);
+    return parsed
+      .map(normalizeWishlistRecord)
+      .filter((record): record is WishlistRecord => Boolean(record));
   } catch {
     return [];
   }
@@ -250,6 +355,67 @@ function readWishlistRecords() {
 function writeWishlistRecords(records: WishlistRecord[]) {
   window.localStorage.setItem(WISHLIST_STORAGE_KEY, JSON.stringify(records));
   window.dispatchEvent(new Event(WISHLIST_CHANGED_EVENT));
+}
+
+function mergeWishlistRecords(records: WishlistRecord[]) {
+  const recordsById = new Map<string, WishlistRecord>();
+
+  for (const record of records) {
+    if (!recordsById.has(record.id)) {
+      recordsById.set(record.id, record);
+    }
+  }
+
+  return [...recordsById.values()].sort(
+    (first, second) => Date.parse(second.savedAt) - Date.parse(first.savedAt),
+  );
+}
+
+async function loadWishlistRecordsFromApi() {
+  const payload = await fetchJson<WishlistPayload>("/api/wishlist");
+
+  return payload.records
+    .map(normalizeWishlistRecord)
+    .filter((record): record is WishlistRecord => Boolean(record));
+}
+
+async function saveWishlistRecordToApi(record: WishlistRecord) {
+  const payload = await fetchJson<WishlistSavePayload>("/api/wishlist", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ record }),
+  });
+
+  return normalizeWishlistRecord(payload.record) ?? record;
+}
+
+async function removeWishlistRecordFromApi(recordId: string) {
+  await fetchJson<{ ok: boolean }>("/api/wishlist", {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ recordId }),
+  });
+}
+
+async function syncWishlistRecordsFromApi() {
+  const apiRecords = await loadWishlistRecordsFromApi();
+  const localRecords = readWishlistRecords();
+  const apiRecordIds = new Set(apiRecords.map((record) => record.id));
+  const localOnlyRecords = localRecords.filter(
+    (record) => !apiRecordIds.has(record.id),
+  );
+  const migratedRecords = await Promise.all(
+    localOnlyRecords.map((record) => saveWishlistRecordToApi(record)),
+  );
+  const nextRecords = mergeWishlistRecords([...migratedRecords, ...apiRecords]);
+
+  writeWishlistRecords(nextRecords);
+
+  return nextRecords;
 }
 
 function readBrowserStorageValue(key: string) {
@@ -265,18 +431,34 @@ function loadWishlistIds() {
 }
 
 function useWishlistRecords() {
-  const [records, setRecords] = useState<WishlistRecord[]>([]);
+  const [records, setRecords] = useState<WishlistRecord[]>(() =>
+    readWishlistRecords(),
+  );
 
   useEffect(() => {
+    let isActive = true;
+
     function syncWishlistRecords() {
       setRecords(readWishlistRecords());
     }
 
     syncWishlistRecords();
+    syncWishlistRecordsFromApi()
+      .then((nextRecords) => {
+        if (isActive) {
+          setRecords(nextRecords);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setRecords(readWishlistRecords());
+        }
+      });
     window.addEventListener(WISHLIST_CHANGED_EVENT, syncWishlistRecords);
     window.addEventListener("storage", syncWishlistRecords);
 
     return () => {
+      isActive = false;
       window.removeEventListener(WISHLIST_CHANGED_EVENT, syncWishlistRecords);
       window.removeEventListener("storage", syncWishlistRecords);
     };
@@ -289,6 +471,9 @@ function useWishlistRecords() {
 
     writeWishlistRecords(nextRecords);
     setRecords(nextRecords);
+    removeWishlistRecordFromApi(recordId).catch(() => {
+      setRecords(readWishlistRecords());
+    });
   }, []);
 
   return { records, removeRecord };
@@ -392,6 +577,8 @@ function LoadingPanel() {
 }
 
 function ErrorPanel({ message }: { message: string }) {
+  const shouldShowReconnect = isSpotifyReconnectMessage(message);
+
   return (
     <div className="rounded-3xl border border-white/10 bg-black/30 p-8 text-center shadow-2xl backdrop-blur-xl">
       <div className="mb-5 flex justify-center">
@@ -411,6 +598,14 @@ function ErrorPanel({ message }: { message: string }) {
       <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-[#FFF4E8]/70">
         {message}
       </p>
+      {shouldShowReconnect ? (
+        <Button
+          asChild
+          className="mt-5 h-10 rounded-full bg-[#1DB954] px-5 text-sm font-semibold text-[#041008] hover:bg-[#22d162]"
+        >
+          <a href={SPOTIFY_AUTH_START_PATH}>Reconnect Spotify</a>
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -531,7 +726,7 @@ function WishlistPanel() {
 
       {hiddenCount > 0 ? (
         <p className="mt-3 text-xs text-[#FFF4E8]/45">
-          {hiddenCount.toLocaleString()} more saved in this browser.
+          {hiddenCount.toLocaleString()} more saved in your wishlist.
         </p>
       ) : null}
     </section>
@@ -892,6 +1087,7 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
     loadWishlistIds(),
   );
   const crateRecords = useMemo(() => getCrateRecords(payload), [payload]);
+  const reviewItems = useMemo(() => getDiscogsReviewItems(payload), [payload]);
   const visibleRecords = useMemo(() => {
     const filteredRecords = availableOnly
       ? crateRecords.filter(
@@ -903,20 +1099,34 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
   }, [availableOnly, crateRecords, sortKey]);
 
   useEffect(() => {
+    let isActive = true;
+
     function syncWishlistIds() {
       setWishlistIds(loadWishlistIds());
     }
 
     window.addEventListener(WISHLIST_CHANGED_EVENT, syncWishlistIds);
     window.addEventListener("storage", syncWishlistIds);
+    syncWishlistRecordsFromApi()
+      .then((records) => {
+        if (isActive) {
+          setWishlistIds(new Set(records.map((record) => record.id)));
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setWishlistIds(loadWishlistIds());
+        }
+      });
 
     return () => {
+      isActive = false;
       window.removeEventListener(WISHLIST_CHANGED_EVENT, syncWishlistIds);
       window.removeEventListener("storage", syncWishlistIds);
     };
   }, []);
 
-  function toggleWishlist(record: VinylCrateRecord) {
+  async function toggleWishlist(record: VinylCrateRecord) {
     const recordId = getCrateRecordId(record);
     const wishlistRecord = createWishlistRecord(record);
     const currentRecords = readWishlistRecords();
@@ -934,6 +1144,27 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
 
     writeWishlistRecords(nextRecords);
     setWishlistIds(new Set(nextRecords.map((nextRecord) => nextRecord.id)));
+
+    try {
+      if (isSaved) {
+        await removeWishlistRecordFromApi(recordId);
+      } else {
+        const savedRecord = await saveWishlistRecordToApi(wishlistRecord);
+        const syncedRecords = mergeWishlistRecords([
+          savedRecord,
+          ...readWishlistRecords().filter(
+            (currentRecord) => currentRecord.id !== savedRecord.id,
+          ),
+        ]);
+
+        writeWishlistRecords(syncedRecords);
+        setWishlistIds(
+          new Set(syncedRecords.map((syncedRecord) => syncedRecord.id)),
+        );
+      }
+    } catch {
+      setWishlistIds(loadWishlistIds());
+    }
   }
 
   return (
@@ -949,7 +1180,7 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         </div>
         <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
           <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Ranked
+            Reliable
           </p>
           <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
             {crateRecords.length.toLocaleString()}
@@ -957,14 +1188,10 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         </div>
         <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
           <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Available
+            Review
           </p>
           <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
-            {crateRecords
-              .filter(
-                (record) => record.match.availability.status === "available",
-              )
-              .length.toLocaleString()}
+            {reviewItems.length.toLocaleString()}
           </p>
         </div>
         <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
@@ -979,11 +1206,44 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
 
       {payload.matchRun.skippedUnits > 0 ? (
         <p className="mt-3 text-sm text-[#FFF4E8]/52">
-          Search run capped at {payload.matchRun.maxSearchUnits.toLocaleString()}{" "}
-          units; {payload.matchRun.skippedUnits.toLocaleString()} remaining
-          albums were not searched in this run.
+          {payload.matchRun.stoppedForRateLimit
+            ? `${payload.matchRun.skippedUnits.toLocaleString()} remaining albums were not searched after the Discogs rate-limit response.`
+            : `Search run capped at ${payload.matchRun.maxSearchUnits.toLocaleString()} units; ${payload.matchRun.skippedUnits.toLocaleString()} remaining albums were not searched in this run.`}
         </p>
       ) : null}
+
+      <div className="mt-3 space-y-2 text-sm leading-6">
+        <p className="text-[#FFF4E8]/52">
+          {getRateLimitLabel(payload.matchRun.rateLimit)} Requests were spaced by{" "}
+          {payload.matchRun.requestDelayMs.toLocaleString()}ms.
+        </p>
+        {payload.matchRun.stoppedForRateLimit ? (
+          <p className="border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-[#FFF4E8]/72">
+            Discogs asked WAXLIST to pause, so the remaining albums were left
+            unsearched for now.
+          </p>
+        ) : null}
+        {payload.matchRun.failures.length > 0 ? (
+          <div className="border-l-2 border-[#D34278] bg-[#D34278]/10 px-4 py-3 text-[#FFF4E8]/72">
+            <p className="font-medium text-[#FFF4E8]">
+              Some Discogs requests need another pass.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {payload.matchRun.failures.slice(0, 3).map((failure) => (
+                <li key={`${failure.searchUnit.id}:${failure.error.code}`}>
+                  {failure.searchUnit.artist} - {failure.searchUnit.album}:{" "}
+                  {failure.error.message}
+                  {failure.error.retryAfterSeconds !== null
+                    ? ` Try again in ${formatRetryDelay(
+                        failure.error.retryAfterSeconds,
+                      )}.`
+                    : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
 
       <div className="mt-5 flex flex-col gap-3 border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -1173,10 +1433,190 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         </div>
       ) : (
         <p className="mt-4 text-sm text-[#FFF4E8]/55">
-          No reliable Discogs matches crossed the automatic threshold.
+          No strong Discogs matches crossed the automatic recommendation
+          threshold.
         </p>
       )}
+
+      <DiscogsUnresolvedResults
+        reviewItems={reviewItems}
+        failures={payload.matchRun.failures}
+      />
     </div>
+  );
+}
+
+function DiscogsUnresolvedResults({
+  reviewItems,
+  failures,
+}: {
+  reviewItems: DiscogsReviewItem[];
+  failures: DiscogsMatchPayload["matchRun"]["failures"];
+}) {
+  if (reviewItems.length === 0 && failures.length === 0) {
+    return null;
+  }
+
+  const possibleItems = reviewItems.filter(
+    (item) => item.status === "possible" || item.status === "weak",
+  );
+  const noMatchItems = reviewItems.filter((item) => item.status === "none");
+
+  return (
+    <section className="mt-6 border border-[#F08A4B]/18 bg-[#05030A]/55 p-4 sm:p-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[#F08A4B]/72">
+            Needs review
+          </p>
+          <h3 className="mt-2 text-xl font-semibold text-[#FFF4E8]">
+            Unmatched and weak Discogs results
+          </h3>
+        </div>
+        <p className="max-w-xl text-sm leading-6 text-[#FFF4E8]/58">
+          These albums are not guaranteed recommendations. Review the Discogs
+          candidate manually before saving or buying.
+        </p>
+      </div>
+
+      {possibleItems.length > 0 ? (
+        <div className="mt-5">
+          <p className="text-sm font-medium text-[#FFF4E8]">
+            Weak or possible matches needing review
+          </p>
+          <div className="mt-3 grid gap-3">
+            {possibleItems.map((item) => (
+              <article
+                key={`${item.result.searchUnit.id}:${item.status}`}
+                className="border-l border-[#F08A4B]/45 bg-[#F08A4B]/8 px-4 py-3"
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-base font-semibold text-[#FFF4E8]">
+                      {item.result.searchUnit.album}
+                    </p>
+                    <p className="mt-1 text-sm text-[#FFF4E8]/62">
+                      {item.result.searchUnit.artist}
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/62">
+                      {item.result.searchUnit.sourceTrackCount.toLocaleString()}{" "}
+                      source{" "}
+                      {item.result.searchUnit.sourceTrackCount === 1
+                        ? "track"
+                        : "tracks"}{" "}
+                      - {item.reason}
+                    </p>
+                    {item.match ? (
+                      <div className="mt-3 space-y-1 text-sm leading-6 text-[#FFF4E8]/58">
+                        <p>
+                          Candidate: {item.match.title} -{" "}
+                          {item.match.confidenceLabel},{" "}
+                          {item.match.confidence}/100 confidence.
+                        </p>
+                        <p>
+                          {item.match.format.length > 0
+                            ? item.match.format.join(", ")
+                            : "Format unknown"}
+                          {item.match.year ? ` - ${item.match.year}` : ""}
+                          {item.match.country ? ` - ${item.match.country}` : ""}
+                        </p>
+                        <p>{item.match.reasons[0]}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                  {item.match?.uri ? (
+                    <Button
+                      asChild
+                      variant="outline"
+                      className="h-10 w-fit shrink-0 rounded-full border-white/15 bg-white/8 px-4 text-sm text-[#FFF4E8] hover:bg-white/15"
+                    >
+                      <a
+                        href={item.match.uri}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Review Discogs
+                        <ExternalLink className="size-4" />
+                      </a>
+                    </Button>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {noMatchItems.length > 0 ? (
+        <div className="mt-5">
+          <p className="text-sm font-medium text-[#FFF4E8]">
+            No reliable match found
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {noMatchItems.map((item) => (
+              <article
+                key={item.result.searchUnit.id}
+                className="border-l border-white/15 bg-white/[0.045] px-4 py-3"
+              >
+                <p className="text-base font-semibold text-[#FFF4E8]">
+                  {item.result.searchUnit.album}
+                </p>
+                <p className="mt-1 text-sm text-[#FFF4E8]/62">
+                  {item.result.searchUnit.artist}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/58">
+                  {item.result.searchUnit.sourceTrackCount.toLocaleString()}{" "}
+                  source{" "}
+                  {item.result.searchUnit.sourceTrackCount === 1
+                    ? "track"
+                    : "tracks"}{" "}
+                  - {item.reason}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {failures.length > 0 ? (
+        <div className="mt-5">
+          <p className="text-sm font-medium text-[#FFF4E8]">
+            Discogs search failures
+          </p>
+          <div className="mt-3 grid gap-3">
+            {failures.map((failure, index) => (
+              <article
+                key={`${failure.searchUnit.id}:${failure.error.code}:${failure.error.status}:${index}`}
+                className="border-l border-[#D34278]/50 bg-[#D34278]/10 px-4 py-3"
+              >
+                <p className="text-base font-semibold text-[#FFF4E8]">
+                  {failure.searchUnit.album}
+                </p>
+                <p className="mt-1 text-sm text-[#FFF4E8]/62">
+                  {failure.searchUnit.artist}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/62">
+                  {failure.searchUnit.sourceTrackCount.toLocaleString()} source{" "}
+                  {failure.searchUnit.sourceTrackCount === 1
+                    ? "track"
+                    : "tracks"}{" "}
+                  - {failure.error.message}
+                  {failure.error.retryAfterSeconds !== null
+                    ? ` Retry in ${formatRetryDelay(
+                        failure.error.retryAfterSeconds,
+                      )}.`
+                    : ""}
+                </p>
+                <p className="mt-2 text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
+                  {failure.error.code}
+                  {failure.error.status ? ` - HTTP ${failure.error.status}` : ""}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1221,9 +1661,12 @@ function ImportSummaryPanel({
         status: "error",
         payload: null,
         message:
-          error instanceof Error
-            ? error.message
-            : "Discogs matching could not be completed.",
+          error instanceof EndpointRequestError &&
+          error.code === "discogs_configuration_error"
+            ? getDiscogsConfigurationMessage(error)
+            : error instanceof Error
+              ? error.message
+              : "Discogs matching could not be completed.",
       });
     }
   }
@@ -1400,6 +1843,14 @@ function ImportSummaryPanel({
           {discogsMatchState.status === "error" ? (
             <p className="mt-4 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
               {discogsMatchState.message}
+            </p>
+          ) : null}
+
+          {summary.discogsSearchUnits.length === 0 ? (
+            <p className="mt-4 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
+              No album-level Discogs searches are ready for this source. Choose
+              a playlist or saved album with Spotify album metadata, then review
+              the import again.
             </p>
           ) : null}
 
