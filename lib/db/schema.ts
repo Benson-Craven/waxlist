@@ -2,6 +2,7 @@ import {
   index,
   integer,
   jsonb,
+  pgEnum,
   pgTable,
   primaryKey,
   text,
@@ -9,6 +10,18 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+export const collectionItemStatus = pgEnum("collection_item_status", [
+  "owned",
+  "wanted",
+]);
+
+export const discogsImportRunStatus = pgEnum("discogs_import_run_status", [
+  "running",
+  "rate_limited",
+  "completed",
+  "failed",
+]);
 
 export const users = pgTable(
   "users",
@@ -142,5 +155,117 @@ export const wishlistItems = pgTable(
       table.sessionIdHash,
       table.recordKey,
     ),
+  ],
+);
+
+export const collectionItems = pgTable(
+  "collection_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    discogsReleaseId: integer("discogs_release_id").notNull(),
+    discogsMasterId: integer("discogs_master_id"),
+    discogsInstanceId: integer("discogs_instance_id"),
+    discogsFolderId: integer("discogs_folder_id"),
+    artist: text("artist").notNull(),
+    title: text("title").notNull(),
+    format: jsonb("format").$type<string[]>().notNull(),
+    year: integer("year"),
+    label: text("label"),
+    catalogNumber: text("catalog_number"),
+    barcode: text("barcode"),
+    imageUrl: text("image_url"),
+    status: collectionItemStatus("status").notNull(),
+    tags: jsonb("tags").$type<string[]>().notNull(),
+    notes: text("notes"),
+    room: text("room"),
+    unit: text("unit"),
+    shelf: text("shelf"),
+    slot: text("slot"),
+    priceHintCents: integer("price_hint_cents"),
+    priceHintCurrency: text("price_hint_currency"),
+    priceHintLabel: text("price_hint_label"),
+    syncedAt: timestamp("synced_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("collection_items_user_id_idx").on(table.userId),
+    index("collection_items_user_status_idx").on(table.userId, table.status),
+    uniqueIndex("collection_items_user_instance_idx").on(
+      table.userId,
+      table.discogsInstanceId,
+    ),
+    index("collection_items_release_id_idx").on(table.discogsReleaseId),
+    index("collection_items_master_id_idx").on(table.discogsMasterId),
+    index("collection_items_instance_id_idx").on(table.discogsInstanceId),
+    index("collection_items_barcode_idx").on(table.barcode),
+    index("collection_items_catalog_number_idx").on(table.catalogNumber),
+    index("collection_items_user_location_idx").on(
+      table.userId,
+      table.room,
+      table.unit,
+      table.shelf,
+    ),
+  ],
+);
+
+export const discogsImportRuns = pgTable(
+  "discogs_import_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    status: discogsImportRunStatus("status").notNull(),
+    discogsUsername: text("discogs_username"),
+    discogsFolderId: integer("discogs_folder_id").notNull(),
+    nextPage: integer("next_page").notNull(),
+    perPage: integer("per_page").notNull(),
+    totalPages: integer("total_pages"),
+    totalItems: integer("total_items"),
+    importedCount: integer("imported_count").default(0).notNull(),
+    failedCount: integer("failed_count").default(0).notNull(),
+    failures: jsonb("failures")
+      .$type<
+        Array<{
+          page: number;
+          releaseId: number | null;
+          instanceId: number | null;
+          message: string;
+        }>
+      >()
+      .notNull(),
+    rateLimit: jsonb("rate_limit")
+      .$type<{
+        limit: number | null;
+        used: number | null;
+        remaining: number | null;
+      } | null>()
+      .notNull(),
+    retryAfterSeconds: integer("retry_after_seconds"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("discogs_import_runs_user_id_idx").on(table.userId),
+    index("discogs_import_runs_user_status_idx").on(table.userId, table.status),
   ],
 );

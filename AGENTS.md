@@ -1,14 +1,14 @@
 # AGENTS.md
 
-# Codex Agent Instructions for WAXLIST MVP
+# Codex Agent Instructions for WAXLIST
 
 ## 1. Mission
 
-You are building the WAXLIST MVP: a web app that connects Spotify listening data to Discogs vinyl catalogue/marketplace data and recommends records the user may want to buy.
+You are building WAXLIST: a vinyl collection workspace that started as a Spotify-to-Discogs recommendation MVP and is now moving toward a collector cockpit for personal collection search, Discogs import, digging mode, smart wantlist management, shelf/location tracking, and collection health.
 
-Primary goal:
+Current product goal:
 
-> Generate a working MVP, not a perfect collector-grade platform.
+> Turn the current working Spotify-to-vinyl MVP into a useful authenticated collection workspace, without trying to replace the full Discogs marketplace.
 
 Read these files before making changes:
 
@@ -175,7 +175,7 @@ Do not brute-force Discogs with one request per track if the playlist can be gro
 
 ### Prioritise Working MVP Over Fancy Extras
 
-Build in this order:
+First-stage MVP order, much of which already exists:
 
 1. Spotify OAuth.
 2. Playlist import.
@@ -186,6 +186,19 @@ Build in this order:
 7. Wishlist.
 8. Caching/rate limiting hardening.
 9. Polish.
+
+Next-stage implementation order:
+
+1. Authenticated app shell/workspace.
+2. Persistent navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+3. Record inspector pattern for selected records.
+4. Discogs collection and wantlist import using official API access only.
+5. Local-first collection cache/search for fast record-shop use.
+6. Digging mode with quick owned/wanted/duplicate/price/location answers.
+7. Smart wantlist rules: priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state where data supports it.
+8. Shelf/location fields: room, unit, shelf, slot, and notes.
+9. Collection health dashboard: duplicates, high-value records, recently added records, not-recently-listened records where Spotify data supports it, and missing albums from collected or streamed artists.
+10. Pressing comparison/family-tree research views only after the collection browser, digging mode, and wantlist manager are useful.
 
 ### Design Spec Is Binding
 
@@ -201,6 +214,19 @@ Before implementing or editing any UI, read `DESIGN.md` and follow it strictly. 
 - Do not copy Suno assets or text; use Suno only as broad inspiration for a dark, immersive music-product aesthetic.
 
 If a UI implementation conflicts with `DESIGN.md`, treat the implementation as wrong unless the user explicitly changes the design direction.
+
+### App Shell Direction Is Binding For Authenticated Work
+
+For connected/authenticated users, the product should move away from overlay-centered flows.
+
+Required authenticated workspace direction:
+
+- Landing page remains the unauthenticated first screen.
+- Authenticated users should land in a persistent app shell/workspace, not a hero page.
+- The app shell should include navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- The app shell should include global search or command input, sync/import status, a main workspace region, and a record inspector region/drawer.
+- Overlays are supporting UI only: import review, match explanation, edit shelf location, pressing comparison details, and destructive confirmations.
+- Do not make modal overlays the primary product surface for collection browsing, wantlist management, or digging mode.
 
 ## 3. Red Herrings and Explicit Non-Goals
 
@@ -222,7 +248,7 @@ Do not build:
 - Email alert system.
 - Price tracker.
 - Public profile pages.
-- Full pressing comparison matrix.
+- Full pressing comparison matrix before collection/digging/wantlist workflows are useful.
 
 Do not over-personalise the app UI by mechanically prefixing every app label, button, toast, or empty state with `Benson`.
 
@@ -335,6 +361,23 @@ src/lib/discogs/rateLimiter.ts
 
 Do not scatter raw `fetch` calls throughout UI components.
 
+### Collection Workspace Logic
+
+Keep collection, wantlist, shelf, and digging logic outside UI components.
+
+Use or add dedicated modules along these lines, following the existing root-level project convention if `src/` is not used:
+
+```txt
+lib/collection/importDiscogsCollection.ts
+lib/collection/searchCollection.ts
+lib/collection/location.ts
+lib/wantlist/rules.ts
+lib/wantlist/relistFilter.ts
+lib/digging/lookupRecord.ts
+```
+
+The UI should consume already-normalized collection records, ownership status, wantlist status, duplicate warnings, shelf location, and price/marketplace hints.
+
 ### Matching Logic
 
 Keep matching logic isolated:
@@ -357,9 +400,14 @@ spotify:playlist:{playlistId}:{snapshotId}
 discogs:search:{normalisedArtist}:{normalisedAlbum}
 discogs:release:{releaseId}
 discogs:marketplace:{releaseId}
+collection:record:{userId}:{releaseId}
+collection:search:{userId}:{queryHash}
+wantlist:rules:{userId}
 ```
 
 Cache implementation may start simple, but the interface should allow replacing it later.
+
+For collection search, prefer an offline-capable local cache after import. Browser `localStorage` can be used for small transitional state, but larger searchable collection data should be designed so it can move to IndexedDB or another offline-capable client store.
 
 ### Error Handling
 
@@ -387,6 +435,13 @@ Required initial UI direction:
 Prefer clean, responsive layouts.
 
 Prioritise readability over decorative animation.
+
+For authenticated app screens:
+
+- Prefer dense, scannable workspace layouts over marketing-style hero sections.
+- Make common collector actions fast: search, filter, inspect, mark wanted, edit shelf location, and open Discogs.
+- Use a stable app-shell layout with clear navigation and an inspector rather than nested cards or modal-heavy flows.
+- Digging mode should be optimized for mobile and poor connectivity.
 
 ## 8. Suggested Build Order
 
@@ -454,6 +509,51 @@ Prioritise readability over decorative animation.
 - Add basic tests.
 - Run build/lint/typecheck.
 
+### Phase 9 — App Shell Foundation
+
+- Add authenticated workspace shell.
+- Add Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health navigation stubs.
+- Add global search/command input shell.
+- Add record inspector component shell.
+- Move connected workspace content into the app shell without breaking the landing page.
+
+### Phase 10 — Discogs Collection Import
+
+- Add official Discogs collection/wantlist import service.
+- Store imported collection records in Postgres.
+- Track sync status, partial failures, and rate-limit state.
+- Avoid scraping.
+- Add clear empty/error/retry states.
+
+### Phase 11 — Local-First Collection Browser
+
+- Add collection search and filters.
+- Cache imported collection data locally for fast lookup.
+- Show owned/wanted/duplicate status.
+- Show shelf location when available.
+- Add record inspector actions.
+
+### Phase 12 — Digging Mode
+
+- Add fast mobile-friendly search/barcode entry surface.
+- Show owned status, wantlist status, duplicate warning, shelf location, and median/price hints where available.
+- Support quick add to wantlist and quick notes.
+- Ensure cached collection data remains useful with poor network access.
+
+### Phase 13 — Smart Wantlist And Shelf
+
+- Add priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state where available.
+- Add room/unit/shelf/slot/notes fields.
+- Add missing-location filters and location edit flows.
+
+### Phase 14 — Collection Health
+
+- Add duplicate summaries.
+- Add high-value records where price data exists.
+- Add recently added records.
+- Add missing albums from collected or streamed artists.
+- Add not-recently-listened records only where Spotify data supports the inference.
+
 ## 9. Acceptance Criteria for Agent Work
 
 Before marking a task complete, verify:
@@ -467,6 +567,8 @@ Before marking a task complete, verify:
 - The implementation matches `USER_REQUIREMENTS.md`.
 - UI changes match `DESIGN.md`.
 - The WAXLIST landing page has the required italic serif H1, liquid gradient background, and `Connect Spotify` CTA.
+- Authenticated workspace changes follow the app-shell direction in `USER_REQUIREMENTS.md`.
+- Collection/digging/wantlist changes do not make modal overlays the primary product surface.
 - Red herrings were not implemented.
 
 ## 10. Recommended Final Response Format
@@ -530,7 +632,7 @@ Do not assume old blog posts, Stack Overflow answers, or AI memory are current.
 
 ## 13. Definition of Done for MVP
 
-The MVP is done when a user can:
+The first-stage Spotify-to-vinyl MVP is done when a user can:
 
 1. See the WAXLIST landing page matching `DESIGN.md`.
 2. Connect Spotify.
@@ -541,3 +643,14 @@ The MVP is done when a user can:
 7. Open a Discogs link.
 8. Save/remove wishlist items.
 9. Use the app without exposing secrets or breaking rate limits.
+
+The next-stage collection workspace is meaningfully useful when a user can:
+
+1. Import or sync a Discogs collection/wantlist through official API access.
+2. Search imported collection data quickly from the authenticated app shell.
+3. Use Digging mode to check owned/wanted/duplicate status in a record-shop context.
+4. Add or edit wantlist priority, tags, price/shipping ceilings, notes, and ignore/relist state where data supports it.
+5. Add or edit shelf location fields.
+6. Inspect a selected record without leaving the current workflow.
+7. Use collection health views to find duplicates, high-value records, recent additions, and collection/listening gaps.
+8. Clear local/session data without exposing secrets or private provider payloads.

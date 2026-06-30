@@ -2,11 +2,9 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { cookies, headers } from "next/headers";
 import { Button } from "@/components/ui/button";
-import { ConnectedWorkspace } from "@/components/spotify/connected-workspace";
 import {
   SPOTIFY_AUTH_REFRESH_PATH,
   HOME_PAGE_COPY,
-  SPOTIFY_AUTH_LOGOUT_PATH,
   SPOTIFY_AUTH_START_PATH,
   SPOTIFY_SESSION_COOKIE,
 } from "@/lib/constants";
@@ -16,7 +14,6 @@ import {
   decodeSpotifySession,
   shouldRefreshSpotifySession,
 } from "@/lib/spotify/oauth";
-import { loadSpotifyWorkspaceSnapshot } from "@/lib/spotify/workspace";
 
 const LANDING_GRADIENT_PRESETS = {
   sunset: {
@@ -158,7 +155,6 @@ function getSpotifyStatusMessage(
     missing?: string | string[];
     reason?: string | string[];
   },
-  hasSpotifySession: boolean,
 ) {
   const spotifyStatus = getFirstSearchParam(searchParams.spotify);
   const missing = getFirstSearchParam(searchParams.missing);
@@ -197,15 +193,11 @@ function getSpotifyStatusMessage(
     return "Spotify connection did not complete. Try connecting again.";
   }
 
-  if (spotifyStatus === "connected" && hasSpotifySession) {
-    return "Spotify connected. Playlist import comes next.";
-  }
-
   if (spotifyStatus === "connected") {
     const spotifyRedirectOrigin = getSpotifyRedirectOrigin();
 
     return spotifyRedirectOrigin
-      ? `Spotify connected on ${spotifyRedirectOrigin}. Open that address to load your playlists.`
+      ? `Spotify connected on ${spotifyRedirectOrigin}. Open that address to load your workspace.`
       : "Spotify connected, but the local browser host does not have the Spotify session cookie.";
   }
 
@@ -213,9 +205,7 @@ function getSpotifyStatusMessage(
     return "Spotify disconnected.";
   }
 
-  if (hasSpotifySession) {
-    return "Spotify connected. Playlist import comes next.";
-  }
+  return undefined;
 }
 
 export default async function Home({
@@ -248,23 +238,21 @@ export default async function Home({
     const spotifyRedirectHost = new URL(spotifyRedirectOrigin).host;
 
     if (requestHost && requestHost !== spotifyRedirectHost) {
-      redirect(`${spotifyRedirectOrigin}/?spotify=connected`);
+      redirect(`${spotifyRedirectOrigin}/app`);
     }
   }
-
-  const showConnectedState = hasSpotifySession;
 
   if (spotifySession && shouldRefreshSpotifySession(spotifySession)) {
     redirect(SPOTIFY_AUTH_REFRESH_PATH);
   }
 
+  if (hasSpotifySession) {
+    redirect("/app");
+  }
+
   const spotifyStatusMessage = getSpotifyStatusMessage(
     resolvedSearchParams,
-    hasSpotifySession,
   );
-  const initialWorkspace = showConnectedState
-    ? await loadSpotifyWorkspaceSnapshot(sessionCookieValue)
-    : null;
   const landingGradient = getLandingGradientPreset(
     resolvedSearchParams.gradient,
   );
@@ -297,11 +285,7 @@ export default async function Home({
       <div className="absolute inset-0 bg-black/35" aria-hidden="true" />
 
       <section
-        className={`relative z-10 flex min-h-screen flex-col items-center px-6 text-center ${
-          showConnectedState
-            ? "justify-start py-8 sm:py-10 lg:py-12"
-            : "justify-center"
-        }`}
+        className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 text-center"
         aria-labelledby="home-heading"
       >
         <p className="mb-5 text-xs uppercase tracking-[0.45em] text-white/60">
@@ -319,62 +303,35 @@ export default async function Home({
           {HOME_PAGE_COPY.tagline}
         </p>
 
-        {showConnectedState ? null : (
-          <Button
-            asChild
-            className="mt-10 cursor-pointer rounded-full px-8 py-6 text-base font-medium"
+        <Button
+          asChild
+          className="mt-10 cursor-pointer rounded-full px-8 py-6 text-base font-medium"
+        >
+          <a
+            href={SPOTIFY_AUTH_START_PATH}
+            aria-label="Connect Spotify to start building your vinyl crate"
           >
-            <a
-              href={SPOTIFY_AUTH_START_PATH}
-              aria-label="Connect Spotify to start building your vinyl crate"
-            >
-              <SpotifyLogo />
-              {HOME_PAGE_COPY.cta}
-            </a>
-          </Button>
-        )}
+            <SpotifyLogo />
+            {HOME_PAGE_COPY.cta}
+          </a>
+        </Button>
 
-        {showConnectedState ? (
-          <div className="mt-10 w-full max-w-6xl text-left">
-            <div className="mb-6 flex flex-col gap-4 rounded-3xl border border-white/10 bg-black/20 p-4 shadow-2xl backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:p-5">
-              <div>
-                <p className="text-xs uppercase tracking-[0.35em] text-white/45">
-                  Spotify connected
-                </p>
-                <p className="mt-2 text-sm text-white/65">
-                  Select one playlist to start shaping your vinyl crate.
-                </p>
-              </div>
-              <form action={SPOTIFY_AUTH_LOGOUT_PATH} method="post">
-                <Button
-                  type="submit"
-                  variant="outline"
-                  className="w-full cursor-pointer rounded-full border-white/15 bg-white/8 px-6 text-white hover:bg-white/15 sm:w-auto"
-                >
-                  Sign Out
-                </Button>
-              </form>
-            </div>
-            <ConnectedWorkspace initialWorkspace={initialWorkspace} />
-          </div>
-        ) : (
-          <p className="mt-5 max-w-md text-balance text-xs leading-6 text-white/60 sm:text-sm">
-            {HOME_PAGE_COPY.privacy}{" "}
-            <Link
-              href="/privacy"
-              className="font-medium text-white/75 underline-offset-4 hover:text-white hover:underline"
-            >
-              {HOME_PAGE_COPY.privacyLinkLabel}
-            </Link>
-            {" · "}
-            <Link
-              href="/data-deletion"
-              className="font-medium text-white/75 underline-offset-4 hover:text-white hover:underline"
-            >
-              {HOME_PAGE_COPY.deletionLinkLabel}
-            </Link>
-          </p>
-        )}
+        <p className="mt-5 max-w-md text-balance text-xs leading-6 text-white/60 sm:text-sm">
+          {HOME_PAGE_COPY.privacy}{" "}
+          <Link
+            href="/privacy"
+            className="font-medium text-white/75 underline-offset-4 hover:text-white hover:underline"
+          >
+            {HOME_PAGE_COPY.privacyLinkLabel}
+          </Link>
+          {" · "}
+          <Link
+            href="/data-deletion"
+            className="font-medium text-white/75 underline-offset-4 hover:text-white hover:underline"
+          >
+            {HOME_PAGE_COPY.deletionLinkLabel}
+          </Link>
+        </p>
 
         {spotifyStatusMessage ? (
           <p

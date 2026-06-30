@@ -1,14 +1,14 @@
 # USER_REQUIREMENTS.md
 
-# WAXLIST Vinyl Discovery MVP — User Requirements
+# WAXLIST Vinyl Collection Workspace — User Requirements
 
 ## 1. Product Summary
 
-Build an MVP web application that connects a user's Spotify listening data to Discogs vinyl catalogue and marketplace data.
+Build WAXLIST as a vinyl collection workspace. The first-stage MVP connects a user's Spotify listening data to Discogs vinyl catalogue/marketplace data and recommends records the user may want to buy. The next stage expands WAXLIST into a fast personal collection layer for collectors who want Discogs data, local/offline utility, smarter wantlist management, and in-shop decision support.
 
 The product should help users answer:
 
-> “Which records should I buy on vinyl based on the music I already listen to?”
+> "Which records should I buy, do I already own this, where is it on my shelf, and what should I watch for next?"
 
 Primary product/display name:
 
@@ -21,7 +21,7 @@ Former/alternate brainstorm names, now deprecated unless the user reopens naming
 - Spinlist
 - Wax Radar
 
-Use `WAXLIST` for the UI, documentation, and MVP identity.
+Use `WAXLIST` for the UI, documentation, and product identity.
 
 ## 2. Core Product Hypothesis
 
@@ -29,22 +29,29 @@ People who already listen to music on Spotify may want to start or improve a vin
 
 The MVP should turn a Spotify playlist, saved albums, or top listening data into a ranked “vinyl crate” of Discogs records.
 
+The next-stage product hypothesis:
+
+- Discogs remains valuable as a database and marketplace, but many collectors need a faster personal operating layer for their own collection and wantlist.
+- WAXLIST should become the collector cockpit: import/catalogue records, search locally, check ownership in record shops, manage wantlist rules, track shelf location, and use Spotify listening context to reveal collection gaps.
+- The app should not try to replace the full Discogs marketplace. It should make the collector's personal data faster, calmer, more searchable, and more actionable.
+
 ## 3. Target User
 
 Primary user:
 
-- Spotify user who likes music and is curious about buying vinyl.
-- May not know Discogs deeply.
-- Wants simple, practical buying suggestions rather than a collector-grade database UI.
+- Vinyl collector or buyer who uses Discogs but wants faster personal collection and wantlist workflows.
+- Wants to answer "do I own this?" quickly while shopping.
+- Wants smarter buying guidance: duplicates, wanted status, median price, shipping-aware rules, and shelf location.
 
 Secondary user:
 
-- Existing vinyl buyer who wants to discover records from their own listening habits.
-- Wants useful filters such as price, country/region, condition, and availability.
+- Spotify user who likes music and is curious about buying vinyl.
+- Existing collector who wants to connect listening habits to collection gaps and buying priorities.
+- Collector with a medium or large collection who needs shelf/location tracking.
 
-## 4. MVP Scope
+## 4. Product Scope
 
-The MVP must support:
+The existing Spotify-to-vinyl MVP must support:
 
 1. User connects Spotify.
 2. User selects one Spotify playlist or imports recent/top listening data where supported.
@@ -56,6 +63,19 @@ The MVP must support:
 8. User can save records to a local wishlist.
 9. App caches Spotify and Discogs results to reduce API usage.
 10. App clearly shows uncertainty when a Discogs match is not reliable.
+
+The next implementation stage must support or prepare for:
+
+1. Authenticated app shell/workspace after connection or import.
+2. Discogs collection and wantlist import where API access allows it.
+3. Local-first collection cache for fast search and record-shop use.
+4. Global collection search by artist, title, label, barcode/catalog number where available, and Discogs identifiers.
+5. Digging mode for quick ownership/wantlist/duplicate checks while shopping.
+6. Smart wantlist fields: priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state.
+7. Shelf/location fields such as room, unit, shelf, slot, and notes.
+8. Collection health summaries: duplicates, high-value records, recent additions, unplayed/not-recently-listened records, and missing albums from artists the user collects or streams.
+9. A persistent record inspector for selected record details and actions.
+10. Focused overlays only for review/edit tasks, not as the main app structure.
 
 ## 5. Design Requirements
 
@@ -72,6 +92,15 @@ Landing page requirements are strict:
 
 The design should feel like a modern music discovery product, not a generic SaaS dashboard.
 
+For authenticated users, WAXLIST should evolve from a landing-plus-overlay flow into a persistent collector workspace:
+
+- Keep the landing page as the unauthenticated first screen.
+- After connection/import, use an app shell with durable navigation and utility-first layout.
+- Prefer dense, scannable workspace screens over hero-style marketing sections.
+- Use overlays for import review, match explanation, shelf editing, and pressing comparison details.
+- Do not make the overlay the primary product surface.
+- The app shell should feel like a premium collector tool: dark, music-first, fast, restrained, and optimized for repeated use.
+
 ## 6. Out of Scope for MVP
 
 Do not build these unless explicitly requested later:
@@ -84,13 +113,14 @@ Do not build these unless explicitly requested later:
 - Mobile native app.
 - Social feed.
 - AI chat assistant.
-- Full pressing comparison engine.
 - Scraping Discogs pages.
 - Importing every playlist automatically without user selection.
 - Large-scale background crawling.
 - Email notifications or price alerts.
 - Public user profiles.
 - Prefixing every in-app product UI label/message with the user's name.
+
+Pressing comparison/family-tree views are allowed as a later product direction, but do not build a collector-grade pressing matrix until the collection browser, digging mode, and wantlist manager are useful.
 
 Important exception: Codex/agent responses to the user should intentionally start with `Benson,` as a continuity canary. This is an agent behaviour requirement, not an app UI requirement.
 
@@ -213,7 +243,7 @@ Acceptance criteria:
 
 ### Wishlist
 
-As a user, I want to save records I might buy later.
+As a user, I want to save records I might buy later and manage them with practical buying rules.
 
 Acceptance criteria:
 
@@ -221,6 +251,77 @@ Acceptance criteria:
 - User can remove a result from wishlist.
 - Wishlist persists for the current user/session.
 - Wishlist includes the Discogs ID/link and the Spotify source context.
+- User can assign priority, tags, notes, and optional price/shipping ceilings.
+- User can mark a listing/seller/relist pattern as ignored where marketplace data supports it.
+
+### App Shell / Collector Workspace
+
+As a connected user, I want WAXLIST to open into a persistent workspace rather than a sequence of modal overlays.
+
+Acceptance criteria:
+
+- App shell includes durable navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- App shell includes global search or command input.
+- App shell shows sync/import status and clear reconnect or configuration actions.
+- Main content changes by workflow without losing navigation context.
+- A selected record can be inspected without leaving the current workflow.
+- Overlays are limited to focused tasks such as import review, match explanation, edit location, or confirm destructive actions.
+
+### Discogs Collection Import
+
+As a collector, I want to import my Discogs collection and wantlist so WAXLIST can become my fast personal collection layer.
+
+Acceptance criteria:
+
+- User can start collection import from Discogs using official API access only.
+- App imports release identifiers, artist/title, format, year, labels/catalog numbers where available, images where available, collection folder/status where available, and wantlist status where available.
+- App stores imported records in the database and updates a local/offline-capable cache for fast search.
+- App handles rate limits, partial imports, retries, and resumable progress.
+- App never scrapes Discogs pages.
+
+### Collection Browser
+
+As a collector, I want to search and filter my collection quickly, especially in record shops.
+
+Acceptance criteria:
+
+- User can search by artist, album/title, label, catalog number, barcode where available, year, tag, shelf location, and Discogs id.
+- Search should work from local cached data once imported.
+- User can filter owned, wanted, duplicates, recently added, high-value, and missing shelf-location records.
+- Record rows/cards show owned/wanted state, duplicate count, shelf location, estimated value/median price where available, and last sync status.
+
+### Digging Mode
+
+As a collector shopping in a record store, I want an immediate answer to whether a record is owned, wanted, duplicated, or worth considering.
+
+Acceptance criteria:
+
+- Digging mode has a prominent search/barcode entry surface optimized for mobile and quick use.
+- Result shows owned status, wantlist status, duplicate warning, shelf location, median/price hint where available, and primary Discogs link.
+- User can quickly add to wantlist, mark as ignored, add a note, or open the record inspector.
+- Digging mode should remain useful with cached collection data when network access is poor.
+
+### Shelf / Location System
+
+As a collector, I want to know exactly where a record is stored.
+
+Acceptance criteria:
+
+- User can assign location fields such as room, unit, shelf, slot, and freeform notes.
+- Location can be edited from collection browser, record inspector, and digging mode.
+- User can filter/sort by missing location and by location hierarchy.
+
+### Collection Health
+
+As a collector, I want WAXLIST to surface useful collection maintenance insights.
+
+Acceptance criteria:
+
+- App can show duplicate records.
+- App can show most valuable/highest median records where data exists.
+- App can show recently added records.
+- App can show records not recently listened to if Spotify data supports the inference.
+- App can show missing albums from artists the user collects or streams.
 
 ### Error and Loading States
 
@@ -324,6 +425,107 @@ Must include:
 - Optional tabs for top tracks/top artists/saved albums if implemented.
 - Loading and error states.
 
+### App Shell / Workspace
+
+Purpose:
+
+- Provide the main authenticated product surface.
+- Replace overlay-centered usage with durable navigation and fast collection workflows.
+
+Must include:
+
+- Left or top navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- Global search or command input.
+- Sync/import status.
+- Main workspace region.
+- Record inspector region or drawer for selected records.
+- Responsive mobile navigation and quick actions.
+
+### Dashboard / Today
+
+Purpose:
+
+- Summarize collection state and direct the user to useful actions.
+
+Must include:
+
+- Collection count.
+- Wantlist count.
+- Recent imports or sync status.
+- Duplicate warnings.
+- Priority wantlist items or watch rules.
+- Shortcuts to Digging mode and Collection search.
+
+### Collection Browser
+
+Purpose:
+
+- Search and manage owned records from imported/cached data.
+
+Must include:
+
+- Fast search.
+- Filters and sort.
+- Owned/wanted/duplicate state.
+- Shelf location.
+- Tags/notes where available.
+- Record inspector action.
+
+### Digging Mode
+
+Purpose:
+
+- Make record-shop lookup extremely fast.
+
+Must include:
+
+- Large search/barcode entry.
+- Owned/wanted status.
+- Duplicate warning.
+- Median/price hint where available.
+- Quick add to wantlist.
+- Record inspector action.
+
+### Smart Wantlist
+
+Purpose:
+
+- Manage buying intent with practical rules.
+
+Must include:
+
+- Priority.
+- Tags.
+- Price ceiling.
+- Shipping ceiling.
+- Condition preference.
+- Ignore/relist controls where supported by available data.
+
+### Shelf / Location
+
+Purpose:
+
+- Locate physical records.
+
+Must include:
+
+- Room/unit/shelf/slot fields.
+- Missing-location filter.
+- Location edit action.
+
+### Insights / Health
+
+Purpose:
+
+- Surface useful collection maintenance and discovery gaps.
+
+Must include:
+
+- Duplicates.
+- High-value records where price data exists.
+- Recently added records.
+- Missing albums from collected or streamed artists.
+
 ### Analysis Progress
 
 Purpose:
@@ -373,9 +575,10 @@ Use this stack unless there is a good reason not to:
 - TypeScript.
 - Tailwind CSS.
 - Server-side API routes or server actions for Spotify/Discogs calls.
-- Supabase/Postgres for persistence if database setup is needed.
+- Neon/Postgres with Drizzle ORM for persistence.
 - Environment variables for API credentials.
-- Optional local JSON/file cache only during early prototyping.
+- Browser-local cache/localStorage or IndexedDB where appropriate for offline-first collection search.
+- Optional service worker/PWA support after the collection import model is stable.
 
 ## 13. Suggested Project Structure
 
@@ -383,15 +586,27 @@ Use this stack unless there is a good reason not to:
 src/
   app/
     page.tsx
-    playlists/page.tsx
-    crate/page.tsx
+    app/
+      page.tsx
+      collection/page.tsx
+      wantlist/page.tsx
+      digging/page.tsx
+      shelf/page.tsx
+      insights/page.tsx
     wishlist/page.tsx
     api/
       spotify/
       discogs/
+      collection/
+      wantlist/
   components/
     ui/
       liquid-gradient.tsx
+    app-shell/
+      AppShell.tsx
+      WorkspaceNav.tsx
+      GlobalSearch.tsx
+      RecordInspector.tsx
     SpotifyConnectButton.tsx
     PlaylistCard.tsx
     VinylResultCard.tsx
@@ -413,10 +628,20 @@ src/
       scoreRecommendation.ts
     cache/
       apiCache.ts
+      collectionCache.ts
+    collection/
+      importDiscogsCollection.ts
+      searchCollection.ts
+      location.ts
+    wantlist/
+      rules.ts
+      relistFilter.ts
   types/
     spotify.ts
     discogs.ts
     recommendation.ts
+    collection.ts
+    wantlist.ts
 ```
 
 ## 14. Suggested Database Tables
@@ -484,6 +709,52 @@ src/
 - `notes`
 - `created_at`
 
+### collection_items
+
+- `id`
+- `user_id`
+- `discogs_release_id`
+- `discogs_master_id`
+- `artist_name`
+- `title`
+- `format`
+- `year`
+- `label`
+- `catalog_number`
+- `barcode`
+- `image_url`
+- `discogs_url`
+- `folder_name`
+- `owned_status`
+- `want_status`
+- `tags`
+- `notes`
+- `room`
+- `unit`
+- `shelf`
+- `slot`
+- `estimated_median_price`
+- `last_synced_at`
+- `created_at`
+- `updated_at`
+
+### wantlist_rules
+
+- `id`
+- `user_id`
+- `collection_item_id`
+- `discogs_release_id`
+- `priority`
+- `tags`
+- `price_ceiling`
+- `shipping_ceiling`
+- `condition_preference`
+- `seller_region_preference`
+- `ignored_seller_ids`
+- `ignored_listing_keys`
+- `created_at`
+- `updated_at`
+
 ### api_cache
 
 - `id`
@@ -505,6 +776,12 @@ GET  /api/spotify/playlists
 GET  /api/spotify/playlists/:id/tracks
 POST /api/crate/generate
 GET  /api/crate/:id
+POST /api/collection/import
+GET  /api/collection
+GET  /api/collection/search
+PATCH /api/collection/:id
+POST /api/wantlist/rules
+PATCH /api/wantlist/rules/:id
 POST /api/wishlist
 DELETE /api/wishlist/:id
 ```
@@ -518,6 +795,8 @@ Discogs calls should happen server-side through internal services, not directly 
 - Store tokens securely.
 - Use environment variables for secrets.
 - Do not log access tokens or refresh tokens.
+- Do not log private collection or wantlist payloads unless redacted or summarized.
+- Treat offline/local caches as user data and provide deletion semantics.
 - Avoid storing more Spotify data than needed.
 - Add a clear privacy note on the landing page.
 - Implement logout/session clearing.
@@ -608,4 +887,3 @@ Codex/agent work must maintain a canonical living handoff file at:
 Agents must read `.agent/CONTINUITY.md` at the start of each assistant turn when it exists, and append only meaningful deltas to the relevant sections: `[PLANS]`, `[DECISIONS]`, `[PROGRESS]`, `[DISCOVERIES]`, and `[OUTCOMES]`.
 
 Every continuity entry must include an ISO timestamp and provenance tag (`[USER]`, `[CODE]`, `[TOOL]`, `[ASSUMPTION]`, or `UNCONFIRMED`). Facts only; no transcripts, raw logs, or guesses.
-

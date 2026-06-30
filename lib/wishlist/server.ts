@@ -24,7 +24,7 @@ const WISHLIST_COOKIE_OPTIONS = {
   path: "/",
 } as const;
 
-type WishlistOwner =
+export type WishlistOwner =
   | {
       type: "user";
       userId: string;

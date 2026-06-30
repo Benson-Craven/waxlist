@@ -52,6 +52,7 @@ import type {
   RankedDiscogsMatch,
 } from "@/lib/matching/match-discogs-release";
 import {
+  normalizeWishlistBuyingControls,
   normalizeWishlistRecord,
   type WishlistRecord,
 } from "@/lib/wishlist/record";
@@ -327,6 +328,7 @@ function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
     availabilityLabel: record.match.availability.label,
     priceLabel: record.match.priceHint.label,
     sourceTrackCount: record.result.searchUnit.sourceTrackCount,
+    buyingControls: normalizeWishlistBuyingControls(null),
   };
 }
 
@@ -547,20 +549,27 @@ function normalizeSearchText(value: string) {
     .trim();
 }
 
-function LoadingPanel() {
+function LoadingPanel({ showProfilePanel }: { showProfilePanel: boolean }) {
   return (
-    <div className="grid gap-6 lg:grid-cols-[0.85fr_1.4fr]">
-      <div className="rounded-3xl border border-white/10 bg-black/25 p-6 shadow-2xl backdrop-blur-xl">
-        <div className="flex items-center gap-4">
-          <div className="grid size-16 place-items-center rounded-2xl bg-white/10">
-            <Loader2 className="size-6 animate-spin text-[#FFF4E8]/70" />
-          </div>
-          <div className="space-y-3">
-            <div className="h-3 w-28 rounded-full bg-white/15" />
-            <div className="h-5 w-44 rounded-full bg-white/10" />
+    <div
+      className={cn(
+        "grid gap-6",
+        showProfilePanel ? "lg:grid-cols-[0.85fr_1.4fr]" : "lg:grid-cols-1",
+      )}
+    >
+      {showProfilePanel ? (
+        <div className="rounded-3xl border border-white/10 bg-black/25 p-6 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center gap-4">
+            <div className="grid size-16 place-items-center rounded-2xl bg-white/10">
+              <Loader2 className="size-6 animate-spin text-[#FFF4E8]/70" />
+            </div>
+            <div className="space-y-3">
+              <div className="h-3 w-28 rounded-full bg-white/15" />
+              <div className="h-5 w-44 rounded-full bg-white/10" />
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
       <div className="rounded-3xl border border-white/10 bg-black/25 p-6 shadow-2xl backdrop-blur-xl">
         <div className="mb-5 h-5 w-36 rounded-full bg-white/15" />
         <div className="grid gap-4 sm:grid-cols-2">
@@ -2793,8 +2802,10 @@ function PlaylistPicker({
 
 export function ConnectedWorkspace({
   initialWorkspace,
+  showProfilePanel = true,
 }: {
   initialWorkspace?: SpotifyWorkspaceSnapshot | null;
+  showProfilePanel?: boolean;
 }) {
   const [loadState, setLoadState] = useState<LoadState>(
     initialWorkspace
@@ -2919,20 +2930,7 @@ export function ConnectedWorkspace({
   if (loadState.status === "loading") {
     return (
       <div>
-        <div className="mb-4 flex justify-center lg:justify-start">
-          <Status
-            status="maintenance"
-            className="h-8 border-blue-400/25 bg-blue-500/10 px-3 text-xs text-[#FFF4E8]"
-            role="status"
-            aria-label="Workspace status: syncing"
-          >
-            <StatusIndicator />
-            <StatusLabel className="text-[#FFF4E8]/72">
-              Syncing Spotify
-            </StatusLabel>
-          </Status>
-        </div>
-        <LoadingPanel />
+        <LoadingPanel showProfilePanel={showProfilePanel} />
       </div>
     );
   }
@@ -2943,31 +2941,13 @@ export function ConnectedWorkspace({
 
   return (
     <div>
-      <div className="mb-4 flex justify-center lg:justify-start">
-        <Status
-          status={loadState.playlistPageError ? "degraded" : "online"}
-          className={cn(
-            "h-8 border-white/10 bg-white/8 px-3 text-xs text-[#FFF4E8] backdrop-blur",
-            loadState.playlistPageError &&
-              "border-amber-400/25 bg-amber-500/10",
-          )}
-          role="status"
-          aria-label={
-            loadState.playlistPageError
-              ? "Workspace status: degraded"
-              : "Workspace status: online"
-          }
-        >
-          <StatusIndicator />
-          <StatusLabel className="text-[#FFF4E8]/72">
-            {loadState.playlistPageError
-              ? "Playlist sync degraded"
-              : "Online"}
-          </StatusLabel>
-        </Status>
-      </div>
-      <div className="grid gap-6 lg:grid-cols-[0.85fr_1.4fr]">
-        <ProfilePanel profile={loadState.profile} />
+      <div
+        className={cn(
+          "grid gap-6",
+          showProfilePanel ? "lg:grid-cols-[0.85fr_1.4fr]" : "lg:grid-cols-1",
+        )}
+      >
+        {showProfilePanel ? <ProfilePanel profile={loadState.profile} /> : null}
         <PlaylistPicker
           playlists={loadState.playlists}
           paging={loadState.playlistPaging}

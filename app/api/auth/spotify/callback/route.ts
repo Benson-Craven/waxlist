@@ -25,8 +25,10 @@ function redirectHome(
   status: "connected" | "error" | "configuration_error",
   reason?: string,
 ) {
-  const url = new URL("/", request.url);
-  url.searchParams.set("spotify", status);
+  const url = new URL(status === "connected" ? "/app" : "/", request.url);
+  if (status !== "connected") {
+    url.searchParams.set("spotify", status);
+  }
   if (reason) {
     url.searchParams.set("reason", reason);
   }

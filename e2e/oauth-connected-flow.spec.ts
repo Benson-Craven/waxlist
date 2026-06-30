@@ -102,10 +102,12 @@ test.describe("OAuth-connected smoke flow", () => {
       });
     });
 
-    await page.goto("/?spotify=connected");
+    await page.goto("/app");
 
-    await expect(page.getByRole("heading", { name: "WAXLIST" })).toBeVisible();
-    await expect(page.getByText("Spotify connected.")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Collection command" }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: /Dashboard/ })).toBeVisible();
     await expect(page.getByText("Smoke Tester")).toBeVisible();
     await expect(page.getByRole("button", { name: "Playlists" })).toBeVisible();
     await page.getByRole("button", { name: "Playlists" }).click();

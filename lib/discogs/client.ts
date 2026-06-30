@@ -49,6 +49,35 @@ export type DiscogsSearchResult = {
   rateLimit: DiscogsRateLimit;
 };
 
+export type DiscogsIdentity = {
+  username: string;
+  rateLimit: DiscogsRateLimit;
+};
+
+export type DiscogsCollectionRelease = {
+  instanceId: number;
+  folderId: number;
+  releaseId: number;
+  masterId: number | null;
+  artist: string;
+  title: string;
+  format: string[];
+  year: number | null;
+  label: string | null;
+  catalogNumber: string | null;
+  barcode: string | null;
+  imageUrl: string | null;
+};
+
+export type DiscogsCollectionPage = {
+  page: number;
+  perPage: number;
+  totalPages: number;
+  totalItems: number;
+  releases: DiscogsCollectionRelease[];
+  rateLimit: DiscogsRateLimit;
+};
+
 type DiscogsSearchResponse = {
   results?: Array<{
     id?: number;
@@ -60,6 +89,47 @@ type DiscogsSearchResponse = {
     thumb?: string;
     uri?: string;
     resource_url?: string;
+  }>;
+};
+
+type DiscogsIdentityResponse = {
+  username?: string;
+};
+
+type DiscogsCollectionResponse = {
+  pagination?: {
+    page?: number;
+    pages?: number;
+    per_page?: number;
+    items?: number;
+  };
+  releases?: Array<{
+    instance_id?: number;
+    folder_id?: number;
+    id?: number;
+    basic_information?: {
+      id?: number;
+      master_id?: number;
+      title?: string;
+      year?: number;
+      thumb?: string;
+      cover_image?: string;
+      artists?: Array<{
+        name?: string;
+      }>;
+      formats?: Array<{
+        name?: string;
+        descriptions?: string[];
+      }>;
+      labels?: Array<{
+        name?: string;
+        catno?: string;
+      }>;
+      identifiers?: Array<{
+        type?: string;
+        value?: string;
+      }>;
+    };
   }>;
 };
 
@@ -124,6 +194,13 @@ function readDiscogsRateLimit(headers: Headers): DiscogsRateLimit {
     limit: parseNumberHeader(headers, "x-discogs-ratelimit"),
     used: parseNumberHeader(headers, "x-discogs-ratelimit-used"),
     remaining: parseNumberHeader(headers, "x-discogs-ratelimit-remaining"),
+  };
+}
+
+function authHeaders(input: { token: string; userAgent: string }) {
+  return {
+    Authorization: `Discogs token=${input.token}`,
+    "User-Agent": input.userAgent,
   };
 }
 
@@ -234,6 +311,154 @@ function normalizeDiscogsCandidate(
   };
 }
 
+function firstCleanString(values: Array<unknown>) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function normalizeDiscogsCollectionRelease(
+  item: NonNullable<DiscogsCollectionResponse["releases"]>[number],
+): DiscogsCollectionRelease | null {
+  const basicInformation = item.basic_information;
+  const releaseId = basicInformation?.id ?? item.id;
+  const instanceId = item.instance_id;
+  const folderId = item.folder_id;
+  const title = firstCleanString([basicInformation?.title]);
+  const artist = firstCleanString(
+    basicInformation?.artists?.map((entry) => entry.name) ?? [],
+  );
+
+  if (!releaseId || !instanceId || !folderId || !title || !artist) {
+    return null;
+  }
+
+  const format = Array.from(
+    new Set(
+      (basicInformation?.formats ?? [])
+        .flatMap((formatEntry) => [
+          formatEntry.name,
+          ...(formatEntry.descriptions ?? []),
+        ])
+        .filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
+        .map((value) => value.trim()),
+    ),
+  );
+  const firstLabel = basicInformation?.labels?.[0];
+  const barcode = firstCleanString(
+    (basicInformation?.identifiers ?? [])
+      .filter((identifier) => identifier.type?.toLowerCase() === "barcode")
+      .map((identifier) => identifier.value),
+  );
+
+  return {
+    instanceId,
+    folderId,
+    releaseId,
+    masterId: basicInformation?.master_id || null,
+    artist,
+    title,
+    format,
+    year:
+      typeof basicInformation?.year === "number" && basicInformation.year > 0
+        ? basicInformation.year
+        : null,
+    label: firstCleanString([firstLabel?.name]),
+    catalogNumber: firstCleanString([firstLabel?.catno]),
+    barcode,
+    imageUrl: firstCleanString([
+      basicInformation?.cover_image,
+      basicInformation?.thumb,
+    ]),
+  };
+}
+
+export async function getDiscogsIdentity(input: {
+  token: string;
+  userAgent: string;
+}): Promise<DiscogsIdentity> {
+  const response = await fetch("https://api.discogs.com/oauth/identity", {
+    headers: authHeaders(input),
+    cache: "no-store",
+  });
+  const rateLimit = readDiscogsRateLimit(response.headers);
+
+  if (!response.ok) {
+    throw await createDiscogsApiError(response);
+  }
+
+  const payload = (await response.json()) as DiscogsIdentityResponse;
+  const username = payload.username?.trim();
+
+  if (!username) {
+    throw new DiscogsApiError({
+      code: "discogs_provider_error",
+      message: "Discogs identity did not include a username.",
+      status: 502,
+      retryAfterSeconds: null,
+      rateLimit,
+      providerMessage: null,
+    });
+  }
+
+  return {
+    username,
+    rateLimit,
+  };
+}
+
+export async function getDiscogsCollectionPage(input: {
+  username: string;
+  folderId?: number;
+  page: number;
+  perPage: number;
+  token: string;
+  userAgent: string;
+}): Promise<DiscogsCollectionPage> {
+  const searchParams = new URLSearchParams({
+    page: String(input.page),
+    per_page: String(input.perPage),
+    sort: "added",
+    sort_order: "desc",
+  });
+  const folderId = input.folderId ?? 0;
+  const response = await fetch(
+    `https://api.discogs.com/users/${encodeURIComponent(
+      input.username,
+    )}/collection/folders/${folderId}/releases?${searchParams}`,
+    {
+      headers: authHeaders(input),
+      cache: "no-store",
+    },
+  );
+  const rateLimit = readDiscogsRateLimit(response.headers);
+
+  if (!response.ok) {
+    throw await createDiscogsApiError(response);
+  }
+
+  const payload = (await response.json()) as DiscogsCollectionResponse;
+  const pagination = payload.pagination ?? {};
+
+  return {
+    page: pagination.page ?? input.page,
+    perPage: pagination.per_page ?? input.perPage,
+    totalPages: pagination.pages ?? input.page,
+    totalItems: pagination.items ?? 0,
+    releases: (payload.releases ?? [])
+      .map(normalizeDiscogsCollectionRelease)
+      .filter((release): release is DiscogsCollectionRelease => Boolean(release)),
+    rateLimit,
+  };
+}
+
 export async function searchDiscogsForUnit(input: {
   unit: DiscogsSearchUnit;
   token: string;
@@ -261,8 +486,7 @@ export async function searchDiscogsForUnit(input: {
         `https://api.discogs.com/database/search?${searchParams}`,
         {
           headers: {
-            Authorization: `Discogs token=${input.token}`,
-            "User-Agent": input.userAgent,
+            ...authHeaders(input),
           },
           cache: "no-store",
         },
@@ -306,8 +530,7 @@ export async function getDiscogsMarketplaceStats(input: {
         `https://api.discogs.com/marketplace/stats/${input.releaseId}`,
         {
           headers: {
-            Authorization: `Discogs token=${input.token}`,
-            "User-Agent": input.userAgent,
+            ...authHeaders(input),
           },
           cache: "no-store",
         },
