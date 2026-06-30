@@ -18,26 +18,32 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://127.0.0.1:3000`. Use this host consistently for Spotify OAuth; the redirect URI and browser origin must match so the OAuth state cookie is sent back on callback.
 
 ## Environment
 
 Copy `.env.example` to `.env.local` and fill real credentials when API work begins.
 
 ```bash
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
-SPOTIFY_REDIRECT_URI=http://localhost:3000/api/auth/spotify/callback
-DISCOGS_USER_AGENT=Waxlist/0.1 +http://localhost:3000
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/api/auth/spotify/callback
+DISCOGS_USER_AGENT=Waxlist/0.1 +http://127.0.0.1:3000
 DISCOGS_TOKEN=
 ```
 
 Secrets without `NEXT_PUBLIC_` must stay server-side.
 
+In the Spotify Developer Dashboard, register this exact local redirect URI:
+
+```txt
+http://127.0.0.1:3000/api/auth/spotify/callback
+```
+
 ## MVP Guardrails
 
 - Do not add database logic until the persistence task is scoped.
-- Do not add Spotify OAuth until the auth task is scoped.
-- Do not add Discogs API calls until the Discogs integration task is scoped.
+- Spotify OAuth uses temporary HTTP-only cookies only; no database token storage exists yet.
+- Discogs matching is server-side and uses normalized album search units; no Discogs data is stored yet.
 - Keep UI direction aligned with `DESIGN.md`.
