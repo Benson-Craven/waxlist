@@ -2,12 +2,14 @@ export const WORKSPACE_VIEW_DEFINITIONS = [
   {
     id: "dashboard",
     label: "Dashboard",
-    description: "Collector cockpit overview and quick workspace launchers.",
+    description:
+      "Taste-led discovery, collection status, and quick workspace launchers.",
   },
   {
     id: "crate",
     label: "Crate",
-    description: "Spotify intake, Discogs matching, and vinyl recommendations.",
+    description:
+      "Saved albums and selected playlists matched to vinyl with confidence before buyability.",
   },
   {
     id: "collection",
@@ -33,7 +35,7 @@ export const WORKSPACE_VIEW_DEFINITIONS = [
     id: "insights",
     label: "Health",
     description:
-      "Collection integrity audit, duplicates, metadata gaps, and recent adds.",
+      "Collection integrity audit, duplicates, metadata gaps, and collection gaps.",
   },
   {
     id: "profile",

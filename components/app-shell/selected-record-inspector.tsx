@@ -30,7 +30,9 @@ import {
   type SelectedRecordPatch,
 } from "@/lib/workspace/selected-record";
 import {
+  getPriceBreakdownDisplay,
   normalizeWishlistRecord,
+  type PriceBreakdownDisplayLine,
   type WishlistRecord,
 } from "@/lib/wishlist/record";
 import { getDefaultSmartWantRules } from "@/lib/wishlist/smart-want";
@@ -123,6 +125,10 @@ function getSourceLabel(record: SelectedRecord) {
   return "Crate match";
 }
 
+function getPriceEvidenceMeta(line: PriceBreakdownDisplayLine) {
+  return line.metaLabel;
+}
+
 export function SelectedRecordInspector({
   record,
   onRecordChange,
@@ -196,6 +202,11 @@ function SelectedRecordInspectorForm({
   const canRemoveWantlist = Boolean(record.wishlistId);
   const canCreateSmartWant = Boolean(record.discogsMasterId);
   const currentLocation = formatCollectionLocation(record);
+  const priceBreakdownDisplay = record.wishlistRecord
+    ? getPriceBreakdownDisplay(record.wishlistRecord.priceBreakdown, undefined, {
+        legacyPriceLabel: record.wishlistRecord.priceLabel,
+      })
+    : null;
 
   async function saveCollectionRecord(patch: SelectedRecordPatch) {
     if (!record.collectionId) {
@@ -521,6 +532,67 @@ function SelectedRecordInspectorForm({
             </p>
           ) : null}
         </div>
+
+        {priceBreakdownDisplay ? (
+          <section
+            className="mt-5 rounded-xl border border-[#FFF4E8]/10 bg-[#FFF4E8]/5 p-3"
+            aria-labelledby="delivered-price-heading"
+          >
+            <div className="flex items-center gap-2 text-[#FFF4E8]">
+              <Tag className="size-3.5 text-[#FFF4E8]/62" aria-hidden="true" />
+              <h3
+                id="delivered-price-heading"
+                className="text-xs font-semibold uppercase tracking-[0.18em]"
+              >
+                Estimated delivered cost
+              </h3>
+            </div>
+            <dl className="mt-3 grid gap-3 text-xs">
+              <div>
+                <dt className="text-[#FFF4E8]/48">Item price</dt>
+                <dd className="mt-1 text-sm font-medium text-[#FFF4E8]">
+                  {priceBreakdownDisplay.itemPrice.label}
+                </dd>
+                <dd className="mt-1 text-[#FFF4E8]/45">
+                  {getPriceEvidenceMeta(priceBreakdownDisplay.itemPrice)}
+                </dd>
+                {priceBreakdownDisplay.legacyPriceHint ? (
+                  <dd className="mt-2 rounded-lg border border-[#FFF4E8]/8 bg-[#FFF4E8]/5 px-2.5 py-2">
+                    <span className="text-[#FFF4E8]/48">
+                      Legacy price hint
+                    </span>
+                    <p className="mt-1 text-sm font-medium text-[#FFF4E8]">
+                      {priceBreakdownDisplay.legacyPriceHint.label}
+                    </p>
+                    <p className="mt-1 leading-5 text-[#FFF4E8]/52">
+                      {priceBreakdownDisplay.legacyPriceHint.explanation}
+                    </p>
+                  </dd>
+                ) : null}
+              </div>
+              <div>
+                <dt className="text-[#FFF4E8]/48">Shipping</dt>
+                <dd className="mt-1 text-sm font-medium text-[#FFF4E8]">
+                  {priceBreakdownDisplay.shipping.label}
+                </dd>
+                <dd className="mt-1 text-[#FFF4E8]/45">
+                  {getPriceEvidenceMeta(priceBreakdownDisplay.shipping)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[#FFF4E8]/48">Estimated delivered cost</dt>
+                <dd className="mt-1 text-sm font-medium text-[#FFF4E8]">
+                  {priceBreakdownDisplay.estimatedDeliveredCost.label}
+                </dd>
+              </div>
+            </dl>
+            <ul className="mt-3 grid gap-1.5 text-xs leading-5 text-[#FFF4E8]/52">
+              {priceBreakdownDisplay.caveats.map((caveat) => (
+                <li key={caveat}>{caveat}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         <div className="mt-5 grid gap-3">
           <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62">

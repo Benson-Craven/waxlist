@@ -69,6 +69,8 @@ describe("Discogs scoring", () => {
           {
             releaseId: 100,
             numForSale: 7,
+            checkedAt: "2026-07-09T10:00:00.000Z",
+            freshForSeconds: 900,
             lowestPrice: {
               value: 24,
               currency: "USD",
@@ -89,10 +91,48 @@ describe("Discogs scoring", () => {
         label: "From $24",
         value: 24,
         currency: "USD",
+        source: "discogs_marketplace_stats",
+        checkedAt: "2026-07-09T10:00:00.000Z",
+        freshForSeconds: 900,
       },
     });
     expect(ranked.matches[0].recommendationScore).toBeGreaterThan(
       ranked.matches[1].recommendationScore,
     );
+  });
+
+  test("preserves marketplace source metadata when lowest price is unavailable", () => {
+    const ranked = rankDiscogsSearchResult(
+      baseResult,
+      new Map([
+        [
+          100,
+          {
+            releaseId: 100,
+            numForSale: 7,
+            checkedAt: "2026-07-09T10:00:00.000Z",
+            freshForSeconds: 900,
+            lowestPrice: null,
+          },
+        ],
+      ]),
+    );
+
+    expect(ranked.matches[0]).toMatchObject({
+      id: 100,
+      availability: {
+        status: "available",
+        label: "7 for sale",
+        numForSale: 7,
+      },
+      priceHint: {
+        label: "Price unavailable",
+        value: null,
+        currency: null,
+        source: "discogs_marketplace_stats",
+        checkedAt: "2026-07-09T10:00:00.000Z",
+        freshForSeconds: 900,
+      },
+    });
   });
 });

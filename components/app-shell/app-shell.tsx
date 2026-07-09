@@ -16,6 +16,7 @@ import {
   Radar,
   RefreshCw,
   Search,
+  Sparkles,
   UserRound,
 } from "lucide-react";
 
@@ -310,6 +311,7 @@ function DashboardHome({
 }) {
   const profileLabel = profile?.displayName ?? profile?.id ?? "Collector";
   const importStatus = getImportStatusCopy(summary);
+  const hasImportedCollection = (summary?.collectionCount ?? 0) > 0;
   const dashboardMetrics = [
     {
       id: "collection",
@@ -377,27 +379,144 @@ function DashboardHome({
       icon: Radar,
     },
   ];
+  const discoverySignals = [
+    {
+      id: "source",
+      label: "Source",
+      value: "Saved albums + chosen playlists",
+      description:
+        "Start from explicit Spotify intent before softer listening-history signals.",
+      icon: Disc3,
+    },
+    {
+      id: "gate",
+      label: "Gate",
+      value: "Strong matches first",
+      description:
+        "Taste fit only ranks records after album-level Discogs confidence is high.",
+      icon: CheckCircle2,
+    },
+    {
+      id: "gap",
+      label: "Collection gap",
+      value: hasImportedCollection
+        ? `${(summary?.ownedCount ?? 0).toLocaleString()} owned records checked`
+        : "Import collection to unlock",
+      description: hasImportedCollection
+        ? "Owned records can be flagged before a recommendation becomes a want."
+        : "Discogs import turns Spotify taste into missing-album decisions.",
+      icon: Archive,
+    },
+    {
+      id: "buyability",
+      label: "Buyability",
+      value: "Secondary filter",
+      description:
+        "Availability and price help sort strong matches; they do not rescue weak ones.",
+      icon: Heart,
+    },
+  ];
 
   return (
     <section
       className="mx-auto w-full max-w-5xl px-1 py-8 sm:py-12"
-      aria-labelledby="dashboard-heading"
+      aria-label="Dashboard overview"
     >
       <div className="text-center">
         <p className="text-xs uppercase tracking-[0.28em] text-[#FFF4E8]/42">
           WAXLIST workspace
         </p>
-        <h1
-          id="dashboard-heading"
-          className="mx-auto mt-4 max-w-3xl text-4xl font-semibold leading-tight text-[#FFF4E8] sm:text-5xl"
-        >
-          What are you working on, {profileLabel}?
-        </h1>
+        <p className="mx-auto mt-4 max-w-3xl text-3xl font-semibold leading-tight text-[#FFF4E8] sm:text-4xl">
+          Turn Spotify taste into records worth checking, not a generic list of
+          guesses.
+        </p>
         <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-[#FFF4E8]/58">
-          Live collection, wantlist, shelf, duplicate, and import signals from
-          the current workspace.
+          {profileLabel} can start from saved albums or a selected playlist,
+          then let WAXLIST separate collection gaps, strong Discogs matches, and
+          practical buying signals.
         </p>
       </div>
+
+      <section
+        className="mt-10 rounded-2xl border border-[#FFF4E8]/10 bg-[#08030f]/68 p-5 shadow-2xl shadow-black/20"
+        aria-labelledby="spotify-discovery-heading"
+      >
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-[#FFF4E8]/48">
+              <Sparkles className="size-4" aria-hidden="true" />
+              <p className="text-xs uppercase tracking-[0.24em]">
+                Spotify-led discovery
+              </p>
+            </div>
+            <h2
+              id="spotify-discovery-heading"
+              className="mt-3 text-2xl font-semibold text-[#FFF4E8]"
+            >
+              Find collection gaps before buying candidates
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#FFF4E8]/58">
+              Use saved albums and selected playlists as the first taste signal.
+              WAXLIST should rank by taste fit only after a reliable
+              album/master match, then treat price and availability as
+              secondary filters.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row lg:flex-col xl:flex-row">
+            <Button
+              asChild
+              className="rounded-full bg-[#FFF4E8] px-5 text-[#08030f] hover:bg-[#f6dfc9]"
+            >
+              <Link href="/app?view=crate">
+                <Disc3 className="size-4" aria-hidden="true" />
+                Build crate
+              </Link>
+            </Button>
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-[#FFF4E8]/14 bg-[#FFF4E8]/7 px-5 text-[#FFF4E8]/76 hover:bg-[#FFF4E8]/12 hover:text-[#FFF4E8]"
+            >
+              <Link
+                href={
+                  hasImportedCollection
+                    ? "/app?view=insights"
+                    : "/app?view=collection"
+                }
+              >
+                <Archive className="size-4" aria-hidden="true" />
+                {hasImportedCollection ? "Review gaps" : "Import collection"}
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {discoverySignals.map((signal) => {
+            const Icon = signal.icon;
+
+            return (
+              <div
+                key={signal.id}
+                className="rounded-xl border border-[#FFF4E8]/9 bg-[#FFF4E8]/5 p-4"
+              >
+                <div className="flex items-center gap-2 text-[#FFF4E8]/44">
+                  <Icon className="size-4" aria-hidden="true" />
+                  <p className="text-xs uppercase tracking-[0.18em]">
+                    {signal.label}
+                  </p>
+                </div>
+                <p className="mt-3 text-sm font-semibold text-[#FFF4E8]">
+                  {signal.value}
+                </p>
+                <p className="mt-2 text-xs leading-5 text-[#FFF4E8]/50">
+                  {signal.description}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="mt-10 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {dashboardMetrics.map((metric) => (
@@ -481,7 +600,7 @@ function WorkspacePanel({ activeView }: { activeView: WorkspaceViewId }) {
   return (
     <section
       className="rounded-2xl border border-[#FFF4E8]/12 bg-[#08030f]/68 p-5 shadow-2xl shadow-black/20"
-      aria-labelledby="workspace-view-heading"
+      aria-label={`${view.label} workspace`}
     >
       <div className="flex flex-col gap-4 border-b border-[#FFF4E8]/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -489,12 +608,9 @@ function WorkspacePanel({ activeView }: { activeView: WorkspaceViewId }) {
             <Icon className="size-4" aria-hidden="true" />
             <p className="text-xs uppercase tracking-[0.24em]">Workspace</p>
           </div>
-          <h1
-            id="workspace-view-heading"
-            className="mt-3 text-2xl font-semibold text-[#FFF4E8]"
-          >
+          <h2 className="mt-3 text-2xl font-semibold text-[#FFF4E8]">
             {view.label}
-          </h1>
+          </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[#FFF4E8]/62">
             {view.description}
           </p>
@@ -529,28 +645,7 @@ function CrateWorkspace({
   initialSpotifyWorkspace?: SpotifyWorkspaceSnapshot | null;
 }) {
   return (
-    <section className="min-w-0 py-1" aria-labelledby="crate-heading">
-      <div className="mb-5 flex flex-col gap-4 border-b border-[#FFF4E8]/10 pb-5 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-            <Disc3 className="size-4" aria-hidden="true" />
-            <p className="text-xs uppercase tracking-[0.24em]">
-              Intake workspace
-            </p>
-          </div>
-          <h1
-            id="crate-heading"
-            className="mt-3 text-3xl font-semibold text-[#FFF4E8]"
-          >
-            Crate
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#FFF4E8]/62">
-            Use Crate only for Spotify intake, Discogs matching, and reviewing
-            recommendations before sending records into Wantlist or Collection.
-          </p>
-        </div>
-      </div>
-
+    <section className="min-w-0 py-1" aria-label="Crate workspace">
       <ConnectedWorkspace
         initialWorkspace={initialSpotifyWorkspace}
         showProfilePanel={false}
@@ -563,23 +658,7 @@ function ProfileWorkspace({ profile }: { profile: WorkspaceProfile | null }) {
   const profileName = profile?.displayName ?? profile?.id ?? "Spotify";
 
   return (
-    <section className="min-w-0 py-1" aria-labelledby="profile-heading">
-      <div className="mb-6 border-b border-[#FFF4E8]/10 pb-5">
-        <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-          <UserRound className="size-4" aria-hidden="true" />
-          <p className="text-xs uppercase tracking-[0.24em]">Account</p>
-        </div>
-        <h1
-          id="profile-heading"
-          className="mt-3 text-3xl font-semibold text-[#FFF4E8]"
-        >
-          Profile
-        </h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-[#FFF4E8]/62">
-          Connected Spotify account details for this WAXLIST session.
-        </p>
-      </div>
-
+    <section className="min-w-0 py-1" aria-label="Profile">
       <div className="max-w-3xl rounded-2xl border border-[#FFF4E8]/10 bg-[#08030f]/48 p-5">
         <div className="flex items-center gap-4">
           {profile?.imageUrl ? (
@@ -660,6 +739,7 @@ export function AppShell({
   initialSearchQuery = "",
 }: AppShellProps) {
   const activeWorkspaceView = getActiveView(activeView);
+  const ActiveWorkspaceIcon = activeWorkspaceView.icon;
   const [selectedRecord, setSelectedRecord] = useState<SelectedRecord | null>(
     null,
   );
@@ -732,12 +812,18 @@ export function AppShell({
           <header className="rounded-2xl border border-[#FFF4E8]/8 bg-[#08030f]/46 p-4 shadow-2xl shadow-black/20">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/45">
-                  Workspace
-                </p>
+                <div className="flex items-center gap-2 text-[#FFF4E8]/45">
+                  <ActiveWorkspaceIcon className="size-4" aria-hidden="true" />
+                  <p className="text-xs uppercase tracking-[0.24em]">
+                    Workspace
+                  </p>
+                </div>
                 <h1 className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
                   {activeWorkspaceView.label}
                 </h1>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-[#FFF4E8]/56">
+                  {activeWorkspaceView.description}
+                </p>
               </div>
               <GlobalWorkspaceSearch
                 key={`${activeView}:${initialSearchQuery}`}

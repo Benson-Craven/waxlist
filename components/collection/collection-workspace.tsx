@@ -704,40 +704,32 @@ export function CollectionWorkspaceFrame({
 
   return (
     <div className="min-w-0">
-      <section aria-labelledby="collection-view-heading">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h1
-            id="collection-view-heading"
-            className="text-3xl font-semibold tracking-[-0.01em] text-[#FFF4E8]"
+      <section aria-label="Collection records">
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            asChild
+            variant="outline"
+            className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8]"
           >
-            Collection
-          </h1>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              asChild
-              variant="outline"
-              className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8]"
-            >
-              <Link href="/app?view=insights">
-                <BarChart3 className="size-4" aria-hidden="true" />
-                Health audit
-              </Link>
-            </Button>
-            <Button
-              type="button"
-              onClick={handleSeedFromWishlist}
-              disabled={isSeeding}
-              variant="outline"
-              className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8] disabled:opacity-45"
-            >
-              {isSeeding ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <Plus className="size-4" aria-hidden="true" />
-              )}
-              Add wishlist
-            </Button>
-          </div>
+            <Link href="/app?view=insights">
+              <BarChart3 className="size-4" aria-hidden="true" />
+              Health audit
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            onClick={handleSeedFromWishlist}
+            disabled={isSeeding}
+            variant="outline"
+            className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8] disabled:opacity-45"
+          >
+            {isSeeding ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Plus className="size-4" aria-hidden="true" />
+            )}
+            Add wishlist
+          </Button>
         </div>
 
         <DiscogsImportPanel

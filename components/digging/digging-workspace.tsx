@@ -582,25 +582,17 @@ export function DiggingWorkspaceFrame({
   }
 
   return (
-    <section className="min-w-0" aria-labelledby="digging-heading">
+    <section className="min-w-0" aria-label="Digging lookup">
       <div className="grid gap-5">
         <div className="min-w-0">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-                <Barcode className="size-4" aria-hidden="true" />
-                <p className="text-xs uppercase tracking-[0.24em]">
-                  Shop lookup
-                </p>
-              </div>
-              <h1
-                id="digging-heading"
-                className="mt-3 text-3xl font-semibold tracking-[-0.01em] text-[#FFF4E8]"
-              >
-                Digging
-              </h1>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-[#FFF4E8]/48">
+              <Barcode className="size-4" aria-hidden="true" />
+              <p className="text-xs uppercase tracking-[0.24em]">
+                Shop lookup
+              </p>
             </div>
-            <div className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/42">
+            <div className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/42 sm:text-right">
               {sourceLabel} / {records.length.toLocaleString()} records
             </div>
           </div>

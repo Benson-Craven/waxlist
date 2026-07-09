@@ -24,6 +24,9 @@ export type RankedDiscogsMatch = DiscogsSearchCandidate & {
     label: string;
     value: number | null;
     currency: string | null;
+    source: "unknown" | "discogs_marketplace_stats";
+    checkedAt: string | null;
+    freshForSeconds: number | null;
   };
 };
 
@@ -98,6 +101,9 @@ function priceHintFromStats(stats?: DiscogsMarketplaceStats | null) {
       label: "Price unavailable",
       value: null,
       currency: null,
+      source: stats ? ("discogs_marketplace_stats" as const) : ("unknown" as const),
+      checkedAt: stats?.checkedAt ?? null,
+      freshForSeconds: stats?.freshForSeconds ?? null,
     };
   }
 
@@ -109,6 +115,9 @@ function priceHintFromStats(stats?: DiscogsMarketplaceStats | null) {
     }).format(stats.lowestPrice.value)}`,
     value: stats.lowestPrice.value,
     currency: stats.lowestPrice.currency,
+    source: "discogs_marketplace_stats" as const,
+    checkedAt: stats.checkedAt,
+    freshForSeconds: stats.freshForSeconds,
   };
 }
 

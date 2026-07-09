@@ -365,28 +365,14 @@ export function ShelfWorkspaceFrame({
   }, []);
 
   return (
-    <section className="min-w-0" aria-labelledby="shelf-heading">
+    <section className="min-w-0" aria-label="Shelf location management">
       <div className="grid gap-5">
         <div className="min-w-0">
-          <div className="mb-5 flex flex-col gap-3 border-b border-[#FFF4E8]/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-                <MapIcon className="size-4" aria-hidden="true" />
-                <p className="text-xs uppercase tracking-[0.24em]">
-                  Location management
-                </p>
-              </div>
-              <h1
-                id="shelf-heading"
-                className="mt-3 text-3xl font-semibold tracking-[-0.01em] text-[#FFF4E8]"
-              >
-                Shelf
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#FFF4E8]/62">
-                Fill room, unit, shelf, and slot so Collection and Digging can
-                answer where a record lives.
-              </p>
-            </div>
+          <div className="mb-5 flex items-center gap-2 text-[#FFF4E8]/48">
+            <MapIcon className="size-4" aria-hidden="true" />
+            <p className="text-xs uppercase tracking-[0.24em]">
+              Location management
+            </p>
           </div>
 
           <ShelfStats records={records} />

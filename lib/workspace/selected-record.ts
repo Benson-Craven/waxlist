@@ -1,5 +1,8 @@
 import type { CollectionRecord } from "@/lib/collection/record";
-import type { WishlistRecord } from "@/lib/wishlist/record";
+import {
+  createUnknownPriceBreakdown,
+  type WishlistRecord,
+} from "@/lib/wishlist/record";
 
 export const SELECTED_RECORD_CHANGED_EVENT = "waxlist:selected-record-changed";
 
@@ -205,6 +208,9 @@ export function createWishlistRecordFromSelected(
     availabilityLabel: "Availability unknown",
     priceLabel: record.priceHintLabel ?? "Price unknown",
     sourceTrackCount: 0,
+    priceBreakdown:
+      record.wishlistRecord?.priceBreakdown ??
+      createUnknownPriceBreakdown("not_checked"),
     buyingControls: {
       priority: null,
       tags: record.tags,

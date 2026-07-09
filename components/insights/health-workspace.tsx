@@ -636,25 +636,12 @@ export function HealthWorkspaceFrame({
   }, []);
 
   return (
-    <section className="min-w-0 py-1" aria-labelledby="health-heading">
-      <div className="mb-6 flex flex-col gap-4 border-b border-[#FFF4E8]/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-            <BarChart3 className="size-4" aria-hidden="true" />
-            <p className="text-xs uppercase tracking-[0.24em]">
-              Collection health
-            </p>
-          </div>
-          <h1
-            id="health-heading"
-            className="mt-3 text-3xl font-semibold text-[#FFF4E8]"
-          >
-            Collection Health
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#FFF4E8]/62">
-            A local-first audit that surfaces duplicate copies, multiple
-            versions, missing condition data, shelf gaps, and incomplete release
-            metadata without changing collection records automatically.
+    <section className="min-w-0 py-1" aria-label="Collection health">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2 text-[#FFF4E8]/48">
+          <BarChart3 className="size-4" aria-hidden="true" />
+          <p className="text-xs uppercase tracking-[0.24em]">
+            Collection health
           </p>
         </div>
         <Button

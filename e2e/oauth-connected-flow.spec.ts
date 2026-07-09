@@ -105,10 +105,16 @@ test.describe("OAuth-connected smoke flow", () => {
     await page.goto("/app");
 
     await expect(
-      page.getByRole("heading", { name: "Collection command" }),
+      page.getByRole("heading", { name: "Dashboard" }),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: /Dashboard/ })).toBeVisible();
-    await expect(page.getByText("Smoke Tester")).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "Find collection gaps before buying candidates",
+      }),
+    ).toBeVisible();
+    await page.getByRole("link", { name: /Build crate/ }).click();
+    await expect(page.getByRole("heading", { name: "Crate" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Playlists" })).toBeVisible();
     await page.getByRole("button", { name: "Playlists" }).click();
     await expect(

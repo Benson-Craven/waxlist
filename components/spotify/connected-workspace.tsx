@@ -52,6 +52,7 @@ import type {
   RankedDiscogsMatch,
 } from "@/lib/matching/match-discogs-release";
 import {
+  createPriceBreakdownFromMarketplaceStats,
   normalizeWishlistBuyingControls,
   normalizeWishlistRecord,
   type WishlistRecord,
@@ -329,6 +330,13 @@ function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
     priceLabel: record.match.priceHint.label,
     sourceTrackCount: record.result.searchUnit.sourceTrackCount,
     buyingControls: normalizeWishlistBuyingControls(null),
+    priceBreakdown: createPriceBreakdownFromMarketplaceStats({
+      value: record.match.priceHint.value,
+      currency: record.match.priceHint.currency,
+      label: record.match.priceHint.label,
+      checkedAt: record.match.priceHint.checkedAt,
+      freshForSeconds: record.match.priceHint.freshForSeconds,
+    }),
   };
 }
 
