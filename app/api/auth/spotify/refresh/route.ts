@@ -1,5 +1,6 @@
 import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
+  clearSpotifyAuthCookies,
   decodeSpotifySession,
   encodeSpotifySession,
   getSpotifyCookieNames,
@@ -20,19 +21,40 @@ type SpotifyRefreshResponse = {
   error?: string;
 };
 
+function getSpotifyRedirectOrigin() {
+  const env = getSpotifyOAuthEnv();
+
+  if (!env.ok) {
+    return null;
+  }
+
+  return new URL(env.redirectUri).origin;
+}
+
 function redirectHome(
   request: NextRequest,
   status: "connected" | "error",
   reason?: string,
+  options?: { clearSpotifySession?: boolean },
 ) {
-  const url = new URL(status === "connected" ? "/app" : "/", request.url);
+  const redirectOrigin = getSpotifyRedirectOrigin();
+  const url = new URL(
+    status === "connected" ? "/app" : "/",
+    redirectOrigin ?? request.url,
+  );
   if (status !== "connected") {
     url.searchParams.set("spotify", status);
   }
   if (reason) {
     url.searchParams.set("reason", reason);
   }
-  return NextResponse.redirect(url);
+  const response = NextResponse.redirect(url);
+
+  if (options?.clearSpotifySession) {
+    clearSpotifyAuthCookies(response);
+  }
+
+  return response;
 }
 
 export async function GET(request: NextRequest) {
@@ -40,7 +62,9 @@ export async function GET(request: NextRequest) {
   const sessionSecret = getSessionSecretEnv();
 
   if (!env.ok || !sessionSecret.ok) {
-    return redirectHome(request, "error", "session_configuration_error");
+    return redirectHome(request, "error", "session_configuration_error", {
+      clearSpotifySession: true,
+    });
   }
 
   const sessionCookie = request.cookies.get(getSpotifyCookieNames().session);
@@ -55,7 +79,9 @@ export async function GET(request: NextRequest) {
   );
 
   if (!session?.refreshToken) {
-    return redirectHome(request, "error", "session_expired");
+    return redirectHome(request, "error", "session_expired", {
+      clearSpotifySession: true,
+    });
   }
 
   const tokenResponse = await fetch(SPOTIFY_TOKEN_URL, {
@@ -84,6 +110,9 @@ export async function GET(request: NextRequest) {
       request,
       "error",
       tokenPayload.error ?? "session_refresh_failed",
+      {
+        clearSpotifySession: true,
+      },
     );
   }
 

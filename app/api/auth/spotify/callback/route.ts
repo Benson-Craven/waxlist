@@ -20,12 +20,26 @@ type SpotifyTokenResponse = {
   error_description?: string;
 };
 
+function getSpotifyRedirectOrigin() {
+  const env = getSpotifyOAuthEnv();
+
+  if (!env.ok) {
+    return null;
+  }
+
+  return new URL(env.redirectUri).origin;
+}
+
 function redirectHome(
   request: NextRequest,
   status: "connected" | "error" | "configuration_error",
   reason?: string,
 ) {
-  const url = new URL(status === "connected" ? "/app" : "/", request.url);
+  const redirectOrigin = getSpotifyRedirectOrigin();
+  const url = new URL(
+    status === "connected" ? "/app" : "/",
+    redirectOrigin ?? request.url,
+  );
   if (status !== "connected") {
     url.searchParams.set("spotify", status);
   }

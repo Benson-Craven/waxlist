@@ -33,6 +33,29 @@ export const spotifyCookieOptions = {
   path: "/",
 } as const;
 
+type SpotifyCookieResponse = {
+  cookies: {
+    set: (
+      name: string,
+      value: string,
+      options: typeof spotifyCookieOptions & { maxAge: number },
+    ) => void;
+  };
+};
+
+export function clearSpotifyAuthCookies(response: SpotifyCookieResponse) {
+  const cookieNames = getSpotifyCookieNames();
+
+  response.cookies.set(cookieNames.session, "", {
+    ...spotifyCookieOptions,
+    maxAge: 0,
+  });
+  response.cookies.set(cookieNames.state, "", {
+    ...spotifyCookieOptions,
+    maxAge: 0,
+  });
+}
+
 export function createSpotifyOAuthState() {
   return crypto.randomUUID().replaceAll("-", "");
 }

@@ -525,7 +525,7 @@ function SmartWantEditor({
           <span>
             Vinyl versions
             <span className="mt-1 block text-xs leading-5 text-[#FFF4E8]/42">
-              Leave enabled for the default "any vinyl version" Smart Want.
+              Leave enabled for the default &quot;any vinyl version&quot; Smart Want.
             </span>
           </span>
         </label>

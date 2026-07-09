@@ -1,5 +1,6 @@
 import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
+  clearSpotifyAuthCookies,
   decodeSpotifySession,
   encodeSpotifySession,
   getSpotifyCookieNames,
@@ -57,13 +58,26 @@ function jsonError(
   );
 }
 
+function spotifySessionJsonError(
+  status: number,
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>,
+) {
+  const response = jsonError(status, code, message, extra);
+
+  clearSpotifyAuthCookies(response);
+
+  return response;
+}
+
 async function refreshSpotifySession(
   session: SpotifySession,
 ): Promise<SpotifyAuthorizedRequest> {
   if (!session.refreshToken) {
     return {
       ok: false,
-      response: jsonError(
+      response: spotifySessionJsonError(
         401,
         "spotify_session_expired",
         "Spotify session expired. Connect Spotify again.",
@@ -122,7 +136,7 @@ async function refreshSpotifySession(
   ) {
     return {
       ok: false,
-      response: jsonError(
+      response: spotifySessionJsonError(
         401,
         tokenPayload.error ?? "spotify_refresh_failed",
         "Spotify session could not be refreshed. Connect Spotify again.",
@@ -214,7 +228,7 @@ export async function getSpotifyAuthorizedRequest(
   if (!session) {
     return {
       ok: false,
-      response: jsonError(
+      response: spotifySessionJsonError(
         401,
         "spotify_session_invalid",
         "Spotify session cookie is invalid. Connect Spotify again.",
@@ -284,7 +298,11 @@ export function spotifyApiErrorResponse(
     { status },
   );
 
-  copyCookieHeaders(cookieResponse, response);
+  if (status === 401) {
+    clearSpotifyAuthCookies(response);
+  } else {
+    copyCookieHeaders(cookieResponse, response);
+  }
 
   return response;
 }

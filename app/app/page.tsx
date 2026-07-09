@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell/app-shell";
@@ -7,7 +7,7 @@ import {
   SPOTIFY_AUTH_REFRESH_PATH,
   SPOTIFY_SESSION_COOKIE,
 } from "@/lib/constants";
-import { getDatabaseEnv, getSessionSecretEnv } from "@/lib/config";
+import { appConfig, getDatabaseEnv, getSessionSecretEnv } from "@/lib/config";
 import {
   decodeSpotifySession,
   shouldRefreshSpotifySession,
@@ -33,6 +33,34 @@ function getSearchQuery(value: string | string[] | undefined) {
   return typeof query === "string" ? query : "";
 }
 
+function getSpotifyRedirectOrigin() {
+  try {
+    return new URL(appConfig.spotifyRedirectUri).origin;
+  } catch {
+    return null;
+  }
+}
+
+function getCanonicalWorkspaceUrl(input: {
+  origin: string;
+  view?: string | string[];
+  query?: string | string[];
+}) {
+  const url = new URL("/app", input.origin);
+  const view = Array.isArray(input.view) ? input.view[0] : input.view;
+  const query = Array.isArray(input.query) ? input.query[0] : input.query;
+
+  if (view) {
+    url.searchParams.set("view", view);
+  }
+
+  if (query) {
+    url.searchParams.set("q", query);
+  }
+
+  return url.toString();
+}
+
 export default async function WorkspaceAppPage({
   searchParams,
 }: {
@@ -48,6 +76,24 @@ export default async function WorkspaceAppPage({
   const sessionCookieValue = cookieStore.get(SPOTIFY_SESSION_COOKIE)?.value;
 
   if (!sessionCookieValue) {
+    const requestHeaders = await headers();
+    const requestHost = requestHeaders.get("host");
+    const spotifyRedirectOrigin = getSpotifyRedirectOrigin();
+
+    if (requestHost && spotifyRedirectOrigin) {
+      const spotifyRedirectHost = new URL(spotifyRedirectOrigin).host;
+
+      if (requestHost !== spotifyRedirectHost) {
+        redirect(
+          getCanonicalWorkspaceUrl({
+            origin: spotifyRedirectOrigin,
+            view: resolvedSearchParams.view,
+            query: resolvedSearchParams.q,
+          }),
+        );
+      }
+    }
+
     redirect("/?spotify=error&reason=session_missing");
   }
 
