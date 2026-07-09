@@ -28,6 +28,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SellerScoutWorkspace } from "@/components/wantlist/seller-scout-workspace";
 import { SmartWantsWorkspace } from "@/components/wantlist/smart-wants-panel";
 import {
   normalizeWishlistRecord,
@@ -55,9 +56,9 @@ type WishlistSavePayload = {
   };
 };
 
-type WantlistTab = "all" | "priced" | "available" | "bundle";
+type WantlistTab = "all" | "priced" | "available" | "relatedArtist";
 type WantlistView = "list" | "grid";
-type WantlistMode = "exact" | "smart";
+type WantlistMode = "exact" | "smart" | "scout";
 
 const WANTLIST_TABS: Array<{
   id: WantlistTab;
@@ -66,7 +67,7 @@ const WANTLIST_TABS: Array<{
   { id: "all", label: "All Wanted" },
   { id: "priced", label: "Priced" },
   { id: "available", label: "Available" },
-  { id: "bundle", label: "Bundle" },
+  { id: "relatedArtist", label: "Related Artists" },
 ];
 
 async function readWishlistResponse(response: Response) {
@@ -169,7 +170,7 @@ function formatIgnoredStateLabel(
   return "No ignored listing";
 }
 
-function getBundleCount(
+function getSameArtistWantCount(
   record: WishlistRecord,
   recordsByArtist: Map<string, WishlistRecord[]>,
 ) {
@@ -214,10 +215,10 @@ function WantlistRecordArtwork({ record }: { record: WishlistRecord }) {
 
 function BuyingSignals({
   record,
-  bundleCount,
+  sameArtistWantCount,
 }: {
   record: WishlistRecord;
-  bundleCount: number;
+  sameArtistWantCount: number;
 }) {
   const listingCount = parseListingCount(record);
 
@@ -237,7 +238,9 @@ function BuyingSignals({
       </span>
       <span className="flex items-center gap-2 rounded-full bg-[#1b1b20] px-3 py-2">
         <PackagePlus className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
-        {bundleCount > 1 ? `${bundleCount} by artist` : "No bundle yet"}
+        {sameArtistWantCount > 1
+          ? `${sameArtistWantCount} same-artist wants`
+          : "No seller evidence"}
       </span>
     </div>
   );
@@ -545,7 +548,10 @@ function WantlistList({
   return (
     <div className="divide-y divide-[#FFF4E8]/8 border-t border-[#FFF4E8]/10">
       {records.map((record) => {
-        const bundleCount = getBundleCount(record, recordsByArtist);
+        const sameArtistWantCount = getSameArtistWantCount(
+          record,
+          recordsByArtist,
+        );
         const isControlsOpen = openRecordId === record.id;
         const isSelected = selectedRecord?.wishlistId === record.id;
 
@@ -589,7 +595,10 @@ function WantlistList({
                 </div>
 
                 <div className="mt-3">
-                  <BuyingSignals record={record} bundleCount={bundleCount} />
+                  <BuyingSignals
+                    record={record}
+                    sameArtistWantCount={sameArtistWantCount}
+                  />
                 </div>
                 <BuyingControlSummary record={record} />
                 <div className="mt-3">
@@ -675,7 +684,10 @@ function WantlistGrid({
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {records.map((record) => {
-        const bundleCount = getBundleCount(record, recordsByArtist);
+        const sameArtistWantCount = getSameArtistWantCount(
+          record,
+          recordsByArtist,
+        );
         const isSelected = selectedRecord?.wishlistId === record.id;
 
         return (
@@ -707,9 +719,9 @@ function WantlistGrid({
                   {getConfidenceLabel(record)} confidence · {record.confidence}/100
                 </span>
                 <span>
-                  {bundleCount > 1
-                    ? `${bundleCount} possible postage bundle`
-                    : "No postage bundle yet"}
+                  {sameArtistWantCount > 1
+                    ? `${sameArtistWantCount} same-artist wants`
+                    : "No seller evidence yet"}
                 </span>
                 <span>Seller verification pending</span>
               </div>
@@ -795,8 +807,8 @@ export function WantlistWorkspaceFrame({
   }, [records]);
   const pricedCount = records.filter(isKnownPrice).length;
   const availableCount = records.filter(isKnownAvailability).length;
-  const bundleCount = records.filter(
-    (record) => getBundleCount(record, recordsByArtist) > 1,
+  const relatedArtistCount = records.filter(
+    (record) => getSameArtistWantCount(record, recordsByArtist) > 1,
   ).length;
   const filteredRecords = useMemo(() => {
     const nextQuery = query.trim().toLowerCase();
@@ -806,8 +818,8 @@ export function WantlistWorkspaceFrame({
         activeTab === "all" ||
         (activeTab === "priced" && isKnownPrice(record)) ||
         (activeTab === "available" && isKnownAvailability(record)) ||
-        (activeTab === "bundle" &&
-          getBundleCount(record, recordsByArtist) > 1);
+        (activeTab === "relatedArtist" &&
+          getSameArtistWantCount(record, recordsByArtist) > 1);
 
       if (!matchesTab) {
         return false;
@@ -925,76 +937,82 @@ export function WantlistWorkspaceFrame({
   }, []);
 
   return (
-    <section aria-labelledby="wantlist-heading">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1
-          id="wantlist-heading"
-          className="text-3xl font-semibold tracking-[-0.01em] text-[#FFF4E8]"
+    <section aria-label="Wantlist records">
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          type="button"
+          onClick={() => setMode("exact")}
+          variant="outline"
+          className={cn(
+            "rounded-full border-transparent px-4",
+            mode === "exact"
+              ? "bg-[#FFF4E8] text-[#08030f]"
+              : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+          )}
         >
-          Wantlist
-        </h1>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            onClick={() => setMode("exact")}
-            variant="outline"
-            className={cn(
-              "rounded-full border-transparent px-4",
-              mode === "exact"
-                ? "bg-[#FFF4E8] text-[#08030f]"
-                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
-            )}
-          >
-            <Heart className="size-4" aria-hidden="true" />
-            Exact Wants
-          </Button>
-          <Button
-            type="button"
-            onClick={() => setMode("smart")}
-            variant="outline"
-            className={cn(
-              "rounded-full border-transparent px-4",
-              mode === "smart"
-                ? "bg-[#FFF4E8] text-[#08030f]"
-                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
-            )}
-          >
-            <SlidersHorizontal className="size-4" aria-hidden="true" />
-            Smart Wants
-          </Button>
-          <Button
-            type="button"
-            onClick={() => setView("list")}
-            variant="outline"
-            disabled={mode !== "exact"}
-            className={cn(
-              "rounded-full border-transparent px-4",
-              view === "list" && mode === "exact"
-                ? "bg-[#FFF4E8] text-[#08030f]"
-                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
-              mode !== "exact" && "opacity-45",
-            )}
-          >
-            <List className="size-4" aria-hidden="true" />
-            List
-          </Button>
-          <Button
-            type="button"
-            onClick={() => setView("grid")}
-            variant="outline"
-            disabled={mode !== "exact"}
-            className={cn(
-              "rounded-full border-transparent px-4",
-              view === "grid" && mode === "exact"
-                ? "bg-[#FFF4E8] text-[#08030f]"
-                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
-              mode !== "exact" && "opacity-45",
-            )}
-          >
-            <Grid2X2 className="size-4" aria-hidden="true" />
-            Grid
-          </Button>
-        </div>
+          <Heart className="size-4" aria-hidden="true" />
+          Exact Wants
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setMode("smart")}
+          variant="outline"
+          className={cn(
+            "rounded-full border-transparent px-4",
+            mode === "smart"
+              ? "bg-[#FFF4E8] text-[#08030f]"
+              : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+          )}
+        >
+          <SlidersHorizontal className="size-4" aria-hidden="true" />
+          Smart Wants
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setMode("scout")}
+          variant="outline"
+          className={cn(
+            "rounded-full border-transparent px-4",
+            mode === "scout"
+              ? "bg-[#FFF4E8] text-[#08030f]"
+              : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+          )}
+        >
+          <PackagePlus className="size-4" aria-hidden="true" />
+          Seller Scout
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setView("list")}
+          variant="outline"
+          disabled={mode !== "exact"}
+          className={cn(
+            "rounded-full border-transparent px-4",
+            view === "list" && mode === "exact"
+              ? "bg-[#FFF4E8] text-[#08030f]"
+              : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+            mode !== "exact" && "opacity-45",
+          )}
+        >
+          <List className="size-4" aria-hidden="true" />
+          List
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setView("grid")}
+          variant="outline"
+          disabled={mode !== "exact"}
+          className={cn(
+            "rounded-full border-transparent px-4",
+            view === "grid" && mode === "exact"
+              ? "bg-[#FFF4E8] text-[#08030f]"
+              : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+            mode !== "exact" && "opacity-45",
+          )}
+        >
+          <Grid2X2 className="size-4" aria-hidden="true" />
+          Grid
+        </Button>
       </div>
 
       {mode === "exact" ? (
@@ -1008,7 +1026,7 @@ export function WantlistWorkspaceFrame({
                   ? pricedCount
                   : tab.id === "available"
                     ? availableCount
-                    : bundleCount;
+                    : relatedArtistCount;
 
             return (
               <button
@@ -1033,43 +1051,45 @@ export function WantlistWorkspaceFrame({
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div className="relative min-w-0 flex-1">
-          <Search
-            className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#FFF4E8]/48"
-            aria-hidden="true"
-          />
-          <Input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={
-              mode === "smart" ? "Search Smart Wants" : "Search wanted vinyl"
-            }
-            className="h-11 rounded-full border-transparent bg-[#1b1b20] pl-11 pr-4 text-[#FFF4E8] placeholder:text-[#FFF4E8]/38 focus-visible:border-[#FFF4E8]/18 focus-visible:ring-[#FFF4E8]/8"
-          />
-        </div>
-        {mode === "exact" ? (
-          <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            className="rounded-full border-transparent bg-[#1b1b20] px-4 text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]"
-          >
-            <Filter className="size-4" aria-hidden="true" />
-            Filters ({hasActiveFilters ? 1 : 0})
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="rounded-full border-transparent bg-[#1b1b20] px-4 text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]"
-          >
-            <ListFilter className="size-4" aria-hidden="true" />
-            Best match
-          </Button>
+      {mode !== "scout" ? (
+        <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-[#FFF4E8]/48"
+              aria-hidden="true"
+            />
+            <Input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={
+                mode === "smart" ? "Search Smart Wants" : "Search wanted vinyl"
+              }
+              className="h-11 rounded-full border-transparent bg-[#1b1b20] pl-11 pr-4 text-[#FFF4E8] placeholder:text-[#FFF4E8]/38 focus-visible:border-[#FFF4E8]/18 focus-visible:ring-[#FFF4E8]/8"
+            />
           </div>
-        ) : null}
-      </div>
+          {mode === "exact" ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full border-transparent bg-[#1b1b20] px-4 text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]"
+              >
+                <Filter className="size-4" aria-hidden="true" />
+                Filters ({hasActiveFilters ? 1 : 0})
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full border-transparent bg-[#1b1b20] px-4 text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]"
+              >
+                <ListFilter className="size-4" aria-hidden="true" />
+                Best match
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-5">
         {mode === "smart" ? (
@@ -1078,51 +1098,53 @@ export function WantlistWorkspaceFrame({
             selectedRecord={selectedRecord}
             onSelectRecord={onSelectRecord}
           />
+        ) : mode === "scout" ? (
+          <SellerScoutWorkspace hasRecords={records.length > 0} />
         ) : (
           <>
-        {error ? (
-          <div className="rounded-xl border border-[#D34278]/24 bg-[#D34278]/8 p-4 text-sm leading-6 text-[#FFF4E8]/78">
-            {error}
-          </div>
-        ) : null}
+            {error ? (
+              <div className="rounded-xl border border-[#D34278]/24 bg-[#D34278]/8 p-4 text-sm leading-6 text-[#FFF4E8]/78">
+                {error}
+              </div>
+            ) : null}
 
-        {isLoading ? (
-          <div className="grid min-h-[34rem] place-items-center text-sm text-[#FFF4E8]/54">
-            <div className="text-center">
-              <Loader2
-                className="mx-auto mb-3 size-5 animate-spin"
-                aria-hidden="true"
+            {isLoading ? (
+              <div className="grid min-h-[34rem] place-items-center text-sm text-[#FFF4E8]/54">
+                <div className="text-center">
+                  <Loader2
+                    className="mx-auto mb-3 size-5 animate-spin"
+                    aria-hidden="true"
+                  />
+                  Loading wantlist
+                </div>
+              </div>
+            ) : filteredRecords.length > 0 ? (
+              view === "list" ? (
+                <WantlistList
+                  records={filteredRecords}
+                  recordsByArtist={recordsByArtist}
+                  onSaveRecord={saveRecord}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={(record) =>
+                    onSelectRecord(selectedRecordFromWishlist(record))
+                  }
+                />
+              ) : (
+                <WantlistGrid
+                  records={filteredRecords}
+                  recordsByArtist={recordsByArtist}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={(record) =>
+                    onSelectRecord(selectedRecordFromWishlist(record))
+                  }
+                />
+              )
+            ) : (
+              <EmptyWantlist
+                hasRecords={records.length > 0}
+                onReset={resetFilters}
               />
-              Loading wantlist
-            </div>
-          </div>
-        ) : filteredRecords.length > 0 ? (
-          view === "list" ? (
-            <WantlistList
-              records={filteredRecords}
-              recordsByArtist={recordsByArtist}
-              onSaveRecord={saveRecord}
-              selectedRecord={selectedRecord}
-              onSelectRecord={(record) =>
-                onSelectRecord(selectedRecordFromWishlist(record))
-              }
-            />
-          ) : (
-            <WantlistGrid
-              records={filteredRecords}
-              recordsByArtist={recordsByArtist}
-              selectedRecord={selectedRecord}
-              onSelectRecord={(record) =>
-                onSelectRecord(selectedRecordFromWishlist(record))
-              }
-            />
-          )
-        ) : (
-          <EmptyWantlist
-            hasRecords={records.length > 0}
-            onReset={resetFilters}
-          />
-        )}
+            )}
           </>
         )}
       </div>

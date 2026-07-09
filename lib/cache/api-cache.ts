@@ -99,6 +99,9 @@ export const apiCacheKeys = {
   discogsMarketplace(releaseId: number) {
     return `discogs:marketplace:${releaseId}`;
   },
+  discogsMarketplaceListings(releaseId: number, page: number, perPage: number) {
+    return `discogs:marketplace:${releaseId}:listings:${page}:${perPage}`;
+  },
   discogsMasterVersions(masterId: number, page: number, perPage: number) {
     return `discogs:master:${masterId}:versions:${page}:${perPage}`;
   },

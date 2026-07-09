@@ -41,10 +41,62 @@ export type DiscogsSearchCandidate = {
 export type DiscogsMarketplaceStats = {
   releaseId: number;
   numForSale: number | null;
+  checkedAt: string | null;
+  freshForSeconds: number | null;
   lowestPrice: {
     value: number;
     currency: string;
   } | null;
+};
+
+export type DiscogsMarketplaceListing = {
+  id: number;
+  status: string | null;
+  uri: string | null;
+  resourceUrl: string | null;
+  condition: string | null;
+  sleeveCondition: string | null;
+  comments: string | null;
+  shipsFrom: string | null;
+  price: {
+    value: number;
+    currency: string;
+  } | null;
+  shippingPrice: {
+    value: number;
+    currency: string;
+  } | null;
+  originalShippingPrice: {
+    value: number;
+    currency: string;
+  } | null;
+  shippingIsBlocked: boolean;
+  seller: {
+    username: string;
+    stats: {
+      rating: string | null;
+      stars: number | null;
+      total: number | null;
+    } | null;
+    minOrderTotal: number | null;
+    shipping: string | null;
+  } | null;
+  release: {
+    id: number | null;
+    title: string | null;
+  } | null;
+};
+
+export type DiscogsMarketplaceListingsPage = {
+  releaseId: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+  totalItems: number;
+  checkedAt: string;
+  freshForSeconds: number | null;
+  listings: DiscogsMarketplaceListing[];
+  rateLimit: DiscogsRateLimit;
 };
 
 export type DiscogsSearchResult = {
@@ -248,6 +300,54 @@ type DiscogsMarketplaceStatsResponse = {
   };
 };
 
+type DiscogsMarketplaceListingResponse = {
+  id?: number;
+  status?: string;
+  uri?: string;
+  resource_url?: string;
+  condition?: string;
+  sleeve_condition?: string;
+  comments?: string;
+  ships_from?: string;
+  price?: {
+    value?: number;
+    currency?: string;
+  };
+  shipping_price?: {
+    value?: number;
+    currency?: string;
+  };
+  original_shipping_price?: {
+    value?: number;
+    currency?: string;
+  };
+  shipping_is_blocked?: boolean;
+  seller?: {
+    username?: string;
+    stats?: {
+      rating?: string;
+      stars?: number;
+      total?: number;
+    };
+    min_order_total?: number;
+    shipping?: string;
+  };
+  release?: {
+    id?: number;
+    title?: string;
+  };
+};
+
+type DiscogsMarketplaceSearchResponse = {
+  pagination?: {
+    page?: number;
+    pages?: number;
+    per_page?: number;
+    items?: number;
+  };
+  listings?: DiscogsMarketplaceListingResponse[];
+};
+
 type CachedDiscogsSearchResult = Omit<DiscogsSearchResult, "searchUnit">;
 
 type DiscogsErrorPayload = {
@@ -282,6 +382,112 @@ export class DiscogsApiError extends Error {
       providerMessage: this.providerMessage,
     };
   }
+}
+
+function cacheTtlSeconds(cacheTtlMs: number | undefined) {
+  return typeof cacheTtlMs === "number" && Number.isFinite(cacheTtlMs)
+    ? Math.max(0, Math.round(cacheTtlMs / 1000))
+    : null;
+}
+
+function normalizeDiscogsMarketplaceStats(
+  stats: Partial<DiscogsMarketplaceStats> | null,
+  input: {
+    releaseId: number;
+    cacheTtlMs?: number;
+  },
+): DiscogsMarketplaceStats {
+  const lowestPriceValue = stats?.lowestPrice?.value;
+  const lowestPriceCurrency = stats?.lowestPrice?.currency;
+
+  return {
+    releaseId:
+      typeof stats?.releaseId === "number" ? stats.releaseId : input.releaseId,
+    numForSale:
+      typeof stats?.numForSale === "number" ? stats.numForSale : null,
+    checkedAt: typeof stats?.checkedAt === "string" ? stats.checkedAt : null,
+    freshForSeconds:
+      typeof stats?.freshForSeconds === "number"
+        ? stats.freshForSeconds
+        : cacheTtlSeconds(input.cacheTtlMs),
+    lowestPrice:
+      typeof lowestPriceValue === "number" && lowestPriceCurrency
+        ? {
+            value: lowestPriceValue,
+            currency: lowestPriceCurrency,
+          }
+        : null,
+  };
+}
+
+function normalizeMarketplacePrice(
+  price: DiscogsMarketplaceListingResponse["price"],
+) {
+  const value = price?.value;
+  const currency = price?.currency;
+
+  return typeof value === "number" && typeof currency === "string" && currency
+    ? {
+        value,
+        currency,
+      }
+    : null;
+}
+
+function normalizeDiscogsMarketplaceListing(
+  listing: DiscogsMarketplaceListingResponse,
+): DiscogsMarketplaceListing | null {
+  if (typeof listing.id !== "number") {
+    return null;
+  }
+
+  return {
+    id: listing.id,
+    status: firstCleanString([listing.status]),
+    uri: firstCleanString([listing.uri]),
+    resourceUrl: firstCleanString([listing.resource_url]),
+    condition: firstCleanString([listing.condition]),
+    sleeveCondition: firstCleanString([listing.sleeve_condition]),
+    comments: firstCleanString([listing.comments]),
+    shipsFrom: firstCleanString([listing.ships_from]),
+    price: normalizeMarketplacePrice(listing.price),
+    shippingPrice: normalizeMarketplacePrice(listing.shipping_price),
+    originalShippingPrice: normalizeMarketplacePrice(
+      listing.original_shipping_price,
+    ),
+    shippingIsBlocked: listing.shipping_is_blocked === true,
+    seller:
+      typeof listing.seller?.username === "string" && listing.seller.username
+        ? {
+            username: listing.seller.username,
+            stats: listing.seller.stats
+              ? {
+                  rating: firstCleanString([listing.seller.stats.rating]),
+                  stars:
+                    typeof listing.seller.stats.stars === "number"
+                      ? listing.seller.stats.stars
+                      : null,
+                  total:
+                    typeof listing.seller.stats.total === "number"
+                      ? listing.seller.stats.total
+                      : null,
+                }
+              : null,
+            minOrderTotal:
+              typeof listing.seller.min_order_total === "number"
+                ? listing.seller.min_order_total
+                : null,
+            shipping: firstCleanString([listing.seller.shipping]),
+          }
+        : null,
+    release: listing.release
+      ? {
+          id:
+            typeof listing.release.id === "number" ? listing.release.id : null,
+          title: firstCleanString([listing.release.title]),
+        }
+      : null,
+  };
 }
 
 function parseNumberHeader(headers: Headers, name: string) {
@@ -1024,13 +1230,68 @@ export async function searchDiscogsForUnit(input: {
   };
 }
 
+export async function searchDiscogsMarketplaceListings(input: {
+  releaseId: number;
+  token: string;
+  userAgent: string;
+  page?: number;
+  perPage?: number;
+  cacheTtlMs?: number;
+}): Promise<DiscogsMarketplaceListingsPage> {
+  const page = input.page ?? 1;
+  const perPage = input.perPage ?? 5;
+
+  return getOrSetApiCache(
+    apiCacheKeys.discogsMarketplaceListings(input.releaseId, page, perPage),
+    input.cacheTtlMs ?? 0,
+    async () => {
+      const searchParams = new URLSearchParams({
+        release_id: String(input.releaseId),
+        page: String(page),
+        per_page: String(perPage),
+      });
+      const response = await fetch(
+        `https://api.discogs.com/marketplace/search?${searchParams}`,
+        {
+          headers: authHeaders(input),
+          cache: "no-store",
+        },
+      );
+      const rateLimit = readDiscogsRateLimit(response.headers);
+
+      if (!response.ok) {
+        throw await createDiscogsApiError(response);
+      }
+
+      const payload = (await response.json()) as DiscogsMarketplaceSearchResponse;
+      const pagination = payload.pagination ?? {};
+
+      return {
+        releaseId: input.releaseId,
+        page: pagination.page ?? page,
+        perPage: pagination.per_page ?? perPage,
+        totalPages: pagination.pages ?? page,
+        totalItems: pagination.items ?? payload.listings?.length ?? 0,
+        checkedAt: new Date().toISOString(),
+        freshForSeconds: cacheTtlSeconds(input.cacheTtlMs),
+        listings: (payload.listings ?? [])
+          .map(normalizeDiscogsMarketplaceListing)
+          .filter((listing): listing is DiscogsMarketplaceListing =>
+            Boolean(listing),
+          ),
+        rateLimit,
+      };
+    },
+  );
+}
+
 export async function getDiscogsMarketplaceStats(input: {
   releaseId: number;
   token: string;
   userAgent: string;
   cacheTtlMs?: number;
 }): Promise<DiscogsMarketplaceStats> {
-  return getOrSetApiCache(
+  const stats = await getOrSetApiCache(
     apiCacheKeys.discogsMarketplace(input.releaseId),
     input.cacheTtlMs ?? 0,
     async () => {
@@ -1051,11 +1312,14 @@ export async function getDiscogsMarketplaceStats(input: {
       const payload = (await response.json()) as DiscogsMarketplaceStatsResponse;
       const lowestPriceValue = payload.lowest_price?.value;
       const lowestPriceCurrency = payload.lowest_price?.currency;
+      const checkedAt = new Date().toISOString();
 
       return {
         releaseId: input.releaseId,
         numForSale:
           typeof payload.num_for_sale === "number" ? payload.num_for_sale : null,
+        checkedAt,
+        freshForSeconds: cacheTtlSeconds(input.cacheTtlMs),
         lowestPrice:
           typeof lowestPriceValue === "number" && lowestPriceCurrency
             ? {
@@ -1066,4 +1330,6 @@ export async function getDiscogsMarketplaceStats(input: {
       };
     },
   );
+
+  return normalizeDiscogsMarketplaceStats(stats, input);
 }
