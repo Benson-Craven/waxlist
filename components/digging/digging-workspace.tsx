@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
 import {
@@ -20,18 +19,19 @@ import {
   Plus,
   Search,
   StickyNote,
-  Tag,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  COLLECTION_LOCATION_FIELDS,
-  formatCollectionLocation,
-} from "@/lib/collection/location";
+import { formatCollectionLocation } from "@/lib/collection/location";
 import type { CollectionRecord } from "@/lib/collection/record";
 import { cn } from "@/lib/utils";
+import {
+  SELECTED_RECORD_CHANGED_EVENT,
+  selectedRecordFromCollection,
+  type SelectedRecord,
+} from "@/lib/workspace/selected-record";
 
 type CollectionPayload = {
   records?: unknown;
@@ -200,6 +200,26 @@ function buildMatches(records: CollectionRecord[], query: string): DiggingMatch[
     .slice(0, 6);
 }
 
+function applySelectedRecordToCollectionRecord(
+  record: CollectionRecord,
+  selected: SelectedRecord,
+): CollectionRecord {
+  if (selected.collectionId !== record.id) {
+    return record;
+  }
+
+  return {
+    ...record,
+    status: selected.status === "wanted" ? "wanted" : "owned",
+    tags: selected.tags,
+    notes: selected.notes,
+    room: selected.room,
+    unit: selected.unit,
+    shelf: selected.shelf,
+    slot: selected.slot,
+  };
+}
+
 function SignalPill({
   tone,
   children,
@@ -221,160 +241,6 @@ function SignalPill({
     >
       {children}
     </span>
-  );
-}
-
-function DiggingInspector({
-  record,
-  onClose,
-  onPatchRecord,
-}: {
-  record: CollectionRecord | null;
-  onClose: () => void;
-  onPatchRecord: (
-    record: CollectionRecord,
-    patch: Partial<
-      Pick<
-        CollectionRecord,
-        "notes" | "status" | "room" | "unit" | "shelf" | "slot"
-      >
-    >,
-  ) => Promise<void>;
-}) {
-  const [notes, setNotes] = useState(record?.notes ?? "");
-  const [room, setRoom] = useState(record?.room ?? "");
-  const [unit, setUnit] = useState(record?.unit ?? "");
-  const [shelf, setShelf] = useState(record?.shelf ?? "");
-  const [slot, setSlot] = useState(record?.slot ?? "");
-  const [message, setMessage] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const locationValues = { room, unit, shelf, slot };
-  const locationSetters = {
-    room: setRoom,
-    unit: setUnit,
-    shelf: setShelf,
-    slot: setSlot,
-  };
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!record) {
-      return;
-    }
-
-    setIsSaving(true);
-    setMessage(null);
-
-    try {
-      await onPatchRecord(record, { notes, room, unit, shelf, slot });
-      setMessage("Details saved.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Details could not save.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  if (!record) {
-    return null;
-  }
-
-  const shelfLocation = formatCollectionLocation(record);
-
-  return (
-    <aside
-      className="rounded-xl border border-[#FFF4E8]/10 bg-[#101014] p-4"
-      aria-labelledby="digging-inspector-heading"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-            <PanelRight className="size-4" aria-hidden="true" />
-            <p className="text-xs uppercase tracking-[0.2em]">Inspector</p>
-          </div>
-          <h2
-            id="digging-inspector-heading"
-            className="mt-3 text-lg font-semibold text-[#FFF4E8]"
-          >
-            {record.title}
-          </h2>
-          <p className="mt-1 text-sm text-[#FFF4E8]/62">{record.artist}</p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={onClose}
-          className="size-8 shrink-0 rounded-full border-[#FFF4E8]/12 bg-transparent text-[#FFF4E8]/60 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8]"
-          aria-label="Close inspector"
-        >
-          <X className="size-4" aria-hidden="true" />
-        </Button>
-      </div>
-
-      <div className="mt-4 grid gap-2 text-sm text-[#FFF4E8]/62">
-        <p className="flex items-center gap-2">
-          <Disc3 className="size-4" aria-hidden="true" />
-          {record.format.length ? record.format.join(", ") : "Format unknown"}
-        </p>
-        <p className="flex items-center gap-2">
-          <Tag className="size-4" aria-hidden="true" />
-          {record.label ?? "Label unknown"}
-          {record.catalogNumber ? ` / ${record.catalogNumber}` : ""}
-        </p>
-        <p className="flex items-center gap-2">
-          <MapPin className="size-4" aria-hidden="true" />
-          {shelfLocation || "No shelf location"}
-        </p>
-      </div>
-
-      <form onSubmit={handleSubmit} className="mt-5">
-        <label className="grid gap-2 text-xs font-medium text-[#FFF4E8]/62">
-          Shop note
-          <textarea
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)}
-            rows={4}
-            placeholder="Condition, sleeve issue, shop price..."
-            className="resize-none rounded-xl border border-[#FFF4E8]/12 bg-[#FFF4E8]/7 px-3 py-2 text-sm text-[#FFF4E8] outline-none placeholder:text-[#FFF4E8]/34 focus:border-[#FFF4E8]/28"
-          />
-        </label>
-
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          {COLLECTION_LOCATION_FIELDS.map(({ key, label, placeholder }) => (
-            <label
-              key={key}
-              className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62"
-            >
-              {label}
-              <Input
-                value={locationValues[key]}
-                onChange={(event) => locationSetters[key](event.target.value)}
-                placeholder={placeholder}
-                className="h-10 rounded-lg border-[#FFF4E8]/12 bg-[#FFF4E8]/7 text-sm text-[#FFF4E8] placeholder:text-[#FFF4E8]/34 focus-visible:border-[#FFF4E8]/28 focus-visible:ring-[#FFF4E8]/10"
-              />
-            </label>
-          ))}
-        </div>
-
-        {message ? (
-          <p className="mt-3 text-xs text-[#FFF4E8]/56">{message}</p>
-        ) : null}
-        <Button
-          type="submit"
-          disabled={isSaving}
-          className="mt-4 w-full rounded-full bg-[#FFF4E8] text-[#08030f] hover:bg-[#f6dfc9]"
-        >
-          {isSaving ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-          <StickyNote className="size-4" aria-hidden="true" />
-        )}
-          Save details
-        </Button>
-      </form>
-    </aside>
   );
 }
 
@@ -513,7 +379,15 @@ function DiggingResultCard({
   );
 }
 
-export function DiggingWorkspaceFrame() {
+export function DiggingWorkspaceFrame({
+  initialQuery = "",
+  selectedRecord,
+  onSelectRecord,
+}: {
+  initialQuery?: string;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: SelectedRecord | null) => void;
+}) {
   const [records, setRecords] = useState<CollectionRecord[]>(() => {
     if (typeof window === "undefined") {
       return [];
@@ -523,10 +397,7 @@ export function DiggingWorkspaceFrame() {
       JSON.parse(window.localStorage.getItem(DIGGING_CACHE_KEY) ?? "[]"),
     );
   });
-  const [query, setQuery] = useState("");
-  const [selectedRecord, setSelectedRecord] = useState<CollectionRecord | null>(
-    null,
-  );
+  const [query, setQuery] = useState(initialQuery);
   const [isLoading, setIsLoading] = useState(true);
   const [isSeeding, setIsSeeding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -603,6 +474,37 @@ export function DiggingWorkspaceFrame() {
     };
   }, [hasCachedRecordsAtLoad]);
 
+  useEffect(() => {
+    function handleSelectedRecordChange(event: Event) {
+      const selected = (event as CustomEvent<SelectedRecord | null>).detail;
+
+      if (!selected?.collectionId) {
+        return;
+      }
+
+      setRecords((currentRecords) => {
+        const nextRecords = currentRecords.map((record) =>
+          applySelectedRecordToCollectionRecord(record, selected),
+        );
+
+        window.localStorage.setItem(DIGGING_CACHE_KEY, JSON.stringify(nextRecords));
+        return nextRecords;
+      });
+    }
+
+    window.addEventListener(
+      SELECTED_RECORD_CHANGED_EVENT,
+      handleSelectedRecordChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SELECTED_RECORD_CHANGED_EVENT,
+        handleSelectedRecordChange,
+      );
+    };
+  }, []);
+
   async function handleSeedFromWishlist() {
     setIsSeeding(true);
     setError(null);
@@ -665,13 +567,13 @@ export function DiggingWorkspaceFrame() {
       window.localStorage.setItem(DIGGING_CACHE_KEY, JSON.stringify(nextRecords));
       return nextRecords;
     });
-    setSelectedRecord((currentRecord) =>
-      currentRecord?.id === updatedRecord.id ? updatedRecord : currentRecord,
-    );
+    if (selectedRecord?.collectionId === updatedRecord.id) {
+      onSelectRecord(selectedRecordFromCollection(updatedRecord));
+    }
   }
 
   function handleOpenInspector(record: CollectionRecord) {
-    setSelectedRecord(record);
+    onSelectRecord(selectedRecordFromCollection(record));
   }
 
   function clearQuery() {
@@ -681,7 +583,7 @@ export function DiggingWorkspaceFrame() {
 
   return (
     <section className="min-w-0" aria-labelledby="digging-heading">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid gap-5">
         <div className="min-w-0">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -806,7 +708,7 @@ export function DiggingWorkspaceFrame() {
                 <DiggingResultCard
                   key={match.record.id}
                   match={match}
-                  isSelected={selectedRecord?.id === match.record.id}
+                  isSelected={selectedRecord?.collectionId === match.record.id}
                   onOpenInspector={handleOpenInspector}
                   onPatchRecord={patchRecord}
                 />
@@ -829,12 +731,6 @@ export function DiggingWorkspaceFrame() {
           )}
         </div>
 
-        <DiggingInspector
-          key={selectedRecord?.id ?? "empty"}
-          record={selectedRecord}
-          onClose={() => setSelectedRecord(null)}
-          onPatchRecord={patchRecord}
-        />
       </div>
     </section>
   );

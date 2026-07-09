@@ -1,27 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Disc3,
   Loader2,
   Map as MapIcon,
   MapPin,
-  PanelRight,
-  Save,
   Search,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  COLLECTION_LOCATION_FIELDS,
   formatCollectionLocation,
   getCollectionLocationGroup,
   isMissingCollectionLocation,
 } from "@/lib/collection/location";
 import type { CollectionRecord } from "@/lib/collection/record";
 import { cn } from "@/lib/utils";
+import {
+  SELECTED_RECORD_CHANGED_EVENT,
+  selectedRecordFromCollection,
+  type SelectedRecord,
+} from "@/lib/workspace/selected-record";
 
 type CollectionPayload = {
   records?: unknown;
@@ -92,6 +94,26 @@ function recordSearchText(record: CollectionRecord) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function applySelectedRecordToCollectionRecord(
+  record: CollectionRecord,
+  selected: SelectedRecord,
+): CollectionRecord {
+  if (selected.collectionId !== record.id) {
+    return record;
+  }
+
+  return {
+    ...record,
+    status: selected.status === "wanted" ? "wanted" : "owned",
+    tags: selected.tags,
+    notes: selected.notes,
+    room: selected.room,
+    unit: selected.unit,
+    shelf: selected.shelf,
+    slot: selected.slot,
+  };
 }
 
 function ShelfStats({ records }: { records: CollectionRecord[] }) {
@@ -183,7 +205,7 @@ function ShelfRecordList({
   onSelectRecord,
 }: {
   records: CollectionRecord[];
-  selectedRecord: CollectionRecord | null;
+  selectedRecord: SelectedRecord | null;
   onSelectRecord: (record: CollectionRecord) => void;
 }) {
   return (
@@ -191,7 +213,7 @@ function ShelfRecordList({
       {records.map((record) => {
         const location = formatCollectionLocation(record);
         const isMissing = isMissingCollectionLocation(record);
-        const isSelected = selectedRecord?.id === record.id;
+        const isSelected = selectedRecord?.collectionId === record.id;
 
         return (
           <button
@@ -234,151 +256,17 @@ function ShelfRecordList({
   );
 }
 
-function LocationInspector({
-  record,
-  onRecordUpdated,
+export function ShelfWorkspaceFrame({
+  initialQuery = "",
+  selectedRecord,
+  onSelectRecord,
 }: {
-  record: CollectionRecord | null;
-  onRecordUpdated: (record: CollectionRecord) => void;
+  initialQuery?: string;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: SelectedRecord | null) => void;
 }) {
-  const [room, setRoom] = useState(record?.room ?? "");
-  const [unit, setUnit] = useState(record?.unit ?? "");
-  const [shelf, setShelf] = useState(record?.shelf ?? "");
-  const [slot, setSlot] = useState(record?.slot ?? "");
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const locationValues = { room, unit, shelf, slot };
-  const locationSetters = {
-    room: setRoom,
-    unit: setUnit,
-    shelf: setShelf,
-    slot: setSlot,
-  };
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!record) {
-      return;
-    }
-
-    setIsSaving(true);
-    setMessage(null);
-
-    try {
-      const response = await fetch(`/api/collection/${record.id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ room, unit, shelf, slot }),
-      });
-      const payload = await readCollectionResponse(response);
-      const updatedRecord = isCollectionRecord(payload?.record)
-        ? payload.record
-        : null;
-
-      if (!updatedRecord) {
-        throw new Error("Collection update returned an invalid record.");
-      }
-
-      onRecordUpdated(updatedRecord);
-      setMessage("Location saved.");
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Location could not be saved.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <aside
-      className="rounded-2xl border border-[#FFF4E8]/10 bg-[#101014] p-4 shadow-2xl shadow-black/20"
-      aria-labelledby="shelf-inspector-heading"
-    >
-      <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-        <PanelRight className="size-4" aria-hidden="true" />
-        <p className="text-xs uppercase tracking-[0.24em]">Location editor</p>
-      </div>
-
-      {record ? (
-        <form onSubmit={handleSubmit} className="mt-5">
-          <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
-            Discogs #{record.discogsReleaseId}
-          </p>
-          <h2
-            id="shelf-inspector-heading"
-            className="mt-2 text-lg font-semibold text-[#FFF4E8]"
-          >
-            {record.title}
-          </h2>
-          <p className="mt-1 text-sm text-[#FFF4E8]/62">{record.artist}</p>
-
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            {COLLECTION_LOCATION_FIELDS.map(({ key, label, placeholder }) => (
-              <label
-                key={key}
-                className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62"
-              >
-                {label}
-                <Input
-                  value={locationValues[key]}
-                  onChange={(event) => locationSetters[key](event.target.value)}
-                  placeholder={placeholder}
-                  className="h-10 rounded-lg border-[#FFF4E8]/14 bg-[#FFF4E8]/8 text-sm text-[#FFF4E8] placeholder:text-[#FFF4E8]/36 focus-visible:border-[#FFF4E8]/30 focus-visible:ring-[#FFF4E8]/12"
-                />
-              </label>
-            ))}
-          </div>
-
-          <p className="mt-4 rounded-lg border border-[#FFF4E8]/8 bg-[#FFF4E8]/5 px-3 py-2 text-xs leading-5 text-[#FFF4E8]/56">
-            Current: {formatCollectionLocation(record) || "No location set"}
-          </p>
-
-          {message ? (
-            <p className="mt-3 text-xs text-[#FFF4E8]/58">{message}</p>
-          ) : null}
-
-          <Button
-            type="submit"
-            disabled={isSaving}
-            className="mt-5 w-full rounded-full bg-[#FFF4E8] text-[#08030f] hover:bg-[#f6dfc9]"
-          >
-            {isSaving ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Save className="size-4" aria-hidden="true" />
-            )}
-            Save location
-          </Button>
-        </form>
-      ) : (
-        <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 px-5 text-center">
-          <MapPin className="size-9 text-[#FFF4E8]/38" aria-hidden="true" />
-          <h2
-            id="shelf-inspector-heading"
-            className="mt-4 text-base font-semibold text-[#FFF4E8]"
-          >
-            Select a record
-          </h2>
-          <p className="mt-2 max-w-xs text-sm leading-6 text-[#FFF4E8]/58">
-            Edit one record at a time. Bulk shelf edits are intentionally left
-            for a later pass.
-          </p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
-export function ShelfWorkspaceFrame() {
   const [records, setRecords] = useState<CollectionRecord[]>([]);
-  const [selectedRecord, setSelectedRecord] = useState<CollectionRecord | null>(
-    null,
-  );
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [filter, setFilter] = useState<ShelfFilter>("missing");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -415,12 +303,12 @@ export function ShelfWorkspaceFrame() {
         }
 
         const nextRecords = normalizeCollectionRecords(payload?.records);
-        setRecords(nextRecords);
-        setSelectedRecord(
+        const firstRecord =
           nextRecords.find((record) => isMissingCollectionLocation(record)) ??
-            nextRecords[0] ??
-            null,
-        );
+          nextRecords[0] ??
+          null;
+        setRecords(nextRecords);
+        onSelectRecord(firstRecord ? selectedRecordFromCollection(firstRecord) : null);
         writeCollectionCache(nextRecords);
       })
       .catch((error) => {
@@ -443,23 +331,42 @@ export function ShelfWorkspaceFrame() {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [onSelectRecord]);
 
-  function handleRecordUpdated(updatedRecord: CollectionRecord) {
-    setRecords((currentRecords) => {
-      const nextRecords = currentRecords.map((record) =>
-        record.id === updatedRecord.id ? updatedRecord : record,
+  useEffect(() => {
+    function handleSelectedRecordChange(event: Event) {
+      const selected = (event as CustomEvent<SelectedRecord | null>).detail;
+
+      if (!selected?.collectionId) {
+        return;
+      }
+
+      setRecords((currentRecords) => {
+        const nextRecords = currentRecords.map((record) =>
+          applySelectedRecordToCollectionRecord(record, selected),
+        );
+
+        writeCollectionCache(nextRecords);
+        return nextRecords;
+      });
+    }
+
+    window.addEventListener(
+      SELECTED_RECORD_CHANGED_EVENT,
+      handleSelectedRecordChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SELECTED_RECORD_CHANGED_EVENT,
+        handleSelectedRecordChange,
       );
-
-      writeCollectionCache(nextRecords);
-      return nextRecords;
-    });
-    setSelectedRecord(updatedRecord);
-  }
+    };
+  }, []);
 
   return (
     <section className="min-w-0" aria-labelledby="shelf-heading">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid gap-5">
         <div className="min-w-0">
           <div className="mb-5 flex flex-col gap-3 border-b border-[#FFF4E8]/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -544,7 +451,9 @@ export function ShelfWorkspaceFrame() {
                 <ShelfRecordList
                   records={filteredRecords}
                   selectedRecord={selectedRecord}
-                  onSelectRecord={setSelectedRecord}
+                  onSelectRecord={(record) =>
+                    onSelectRecord(selectedRecordFromCollection(record))
+                  }
                 />
               ) : (
                 <div className="grid min-h-[28rem] place-items-center text-center">
@@ -568,12 +477,6 @@ export function ShelfWorkspaceFrame() {
             <ShelfGroups records={records} />
           </div>
         </div>
-
-        <LocationInspector
-          key={selectedRecord?.id ?? "empty"}
-          record={selectedRecord}
-          onRecordUpdated={handleRecordUpdated}
-        />
       </div>
     </section>
   );

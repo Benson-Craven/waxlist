@@ -1,5 +1,9 @@
 import { apiCacheKeys, getOrSetApiCache } from "@/lib/cache/api-cache";
 import type { DiscogsSearchUnit } from "@/lib/matching/discogs-search-units";
+import type {
+  PressingCandidate,
+  PressingIdentifier,
+} from "@/lib/pressing-detective/matching";
 
 export type DiscogsRateLimit = {
   limit: number | null;
@@ -67,6 +71,15 @@ export type DiscogsCollectionRelease = {
   catalogNumber: string | null;
   barcode: string | null;
   imageUrl: string | null;
+  mediaCondition: string | null;
+  sleeveCondition: string | null;
+};
+
+export type DiscogsCollectionFieldMap = Map<number, string>;
+
+export type DiscogsCollectionFields = {
+  fields: DiscogsCollectionFieldMap;
+  rateLimit: DiscogsRateLimit;
 };
 
 export type DiscogsCollectionPage = {
@@ -75,6 +88,15 @@ export type DiscogsCollectionPage = {
   totalPages: number;
   totalItems: number;
   releases: DiscogsCollectionRelease[];
+  rateLimit: DiscogsRateLimit;
+};
+
+export type DiscogsMasterVersionsPage = {
+  page: number;
+  perPage: number;
+  totalPages: number;
+  totalItems: number;
+  versions: PressingCandidate[];
   rateLimit: DiscogsRateLimit;
 };
 
@@ -107,6 +129,7 @@ type DiscogsCollectionResponse = {
     instance_id?: number;
     folder_id?: number;
     id?: number;
+    notes?: DiscogsCollectionNote[];
     basic_information?: {
       id?: number;
       master_id?: number;
@@ -130,6 +153,90 @@ type DiscogsCollectionResponse = {
         value?: string;
       }>;
     };
+  }>;
+};
+
+type DiscogsCollectionNote = {
+  field_id?: number;
+  field_name?: string;
+  name?: string;
+  value?: string;
+  field?: {
+    name?: string;
+  };
+};
+
+type DiscogsCollectionFieldsResponse = {
+  fields?: Array<{
+    id?: number;
+    field_id?: number;
+    name?: string;
+  }>;
+};
+
+type DiscogsMasterVersionsResponse = {
+  pagination?: {
+    page?: number;
+    pages?: number;
+    per_page?: number;
+    items?: number;
+  };
+  versions?: Array<{
+    id?: number;
+    title?: string;
+    thumb?: string;
+    format?: string | string[];
+    major_formats?: string[];
+    label?: string;
+    catno?: string;
+    country?: string;
+    released?: string;
+    year?: number | string;
+    resource_url?: string;
+    uri?: string;
+  }>;
+};
+
+type DiscogsReleaseDetailResponse = {
+  id?: number;
+  master_id?: number;
+  title?: string;
+  year?: number;
+  released?: string;
+  country?: string;
+  thumb?: string;
+  uri?: string;
+  resource_url?: string;
+  notes?: string;
+  artists?: Array<{
+    name?: string;
+  }>;
+  images?: Array<{
+    uri?: string;
+    uri150?: string;
+    resource_url?: string;
+    type?: string;
+  }>;
+  formats?: Array<{
+    name?: string;
+    descriptions?: string[];
+  }>;
+  labels?: Array<{
+    name?: string;
+    catno?: string;
+  }>;
+  identifiers?: Array<{
+    type?: string;
+    value?: string;
+    description?: string;
+  }>;
+  companies?: Array<{
+    name?: string;
+    entity_type_name?: string;
+  }>;
+  extraartists?: Array<{
+    name?: string;
+    role?: string;
   }>;
 };
 
@@ -321,8 +428,273 @@ function firstCleanString(values: Array<unknown>) {
   return null;
 }
 
+function normalizeConditionFieldName(value: string | null) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function getCollectionNoteFieldName(
+  note: DiscogsCollectionNote,
+  fieldNames: DiscogsCollectionFieldMap | null | undefined,
+) {
+  return (
+    firstCleanString([note.field_name, note.name, note.field?.name]) ??
+    (typeof note.field_id === "number" ? fieldNames?.get(note.field_id) ?? null : null)
+  );
+}
+
+function getConditionNoteValue(
+  notes: DiscogsCollectionNote[] | undefined,
+  fieldNames: DiscogsCollectionFieldMap | null | undefined,
+  conditionType: "media" | "sleeve",
+) {
+  for (const note of notes ?? []) {
+    const fieldName = normalizeConditionFieldName(
+      getCollectionNoteFieldName(note, fieldNames),
+    );
+
+    if (
+      fieldName.includes(conditionType) &&
+      fieldName.includes("condition")
+    ) {
+      return firstCleanString([note.value]);
+    }
+  }
+
+  return null;
+}
+
+function uniqueCleanStrings(values: Array<unknown>) {
+  return Array.from(
+    new Set(
+      values
+        .filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
+function parseDiscogsYear(...values: Array<unknown>) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const match = value.match(/\b(19|20)\d{2}\b/);
+
+      if (match) {
+        const parsed = Number.parseInt(match[0], 10);
+
+        if (Number.isInteger(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeDiscogsFormat(
+  formats: Array<{
+    name?: string;
+    descriptions?: string[];
+  }> = [],
+) {
+  return uniqueCleanStrings(
+    formats.flatMap((formatEntry) => [
+      formatEntry.name,
+      ...(formatEntry.descriptions ?? []),
+    ]),
+  );
+}
+
+function parseVersionFormat(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return uniqueCleanStrings(value);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return uniqueCleanStrings(value.split(",").map((entry) => entry.trim()));
+}
+
+function normalizeDiscogsIdentifier(
+  identifier: NonNullable<DiscogsReleaseDetailResponse["identifiers"]>[number],
+): PressingIdentifier | null {
+  const type = firstCleanString([identifier.type]);
+  const value = firstCleanString([identifier.value]);
+
+  if (!type || !value) {
+    return null;
+  }
+
+  return {
+    type,
+    value,
+    description: firstCleanString([identifier.description]),
+  };
+}
+
+function getDiscogsUri(value: string | undefined | null, releaseId: number) {
+  if (value?.startsWith("http")) {
+    return value;
+  }
+
+  if (value?.startsWith("/")) {
+    return `https://www.discogs.com${value}`;
+  }
+
+  return `https://www.discogs.com/release/${releaseId}`;
+}
+
+function normalizeMasterVersionCandidate(
+  version: NonNullable<DiscogsMasterVersionsResponse["versions"]>[number],
+  masterId: number,
+): PressingCandidate | null {
+  const releaseId = version.id;
+  const title = firstCleanString([version.title]);
+
+  if (!releaseId || !title) {
+    return null;
+  }
+
+  const formats = uniqueCleanStrings([
+    ...parseVersionFormat(version.format),
+    ...(version.major_formats ?? []),
+  ]);
+  const catalogNumber = firstCleanString([version.catno]);
+  const label = firstCleanString([version.label]);
+
+  return {
+    id: releaseId,
+    masterId,
+    title,
+    artist: null,
+    country: firstCleanString([version.country]),
+    year: parseDiscogsYear(version.year, version.released),
+    formats,
+    labels: label ? [label] : [],
+    catalogNumbers: catalogNumber ? [catalogNumber] : [],
+    barcodes: [],
+    matrixRunouts: [],
+    pressingPlants: [],
+    masteringCredits: [],
+    identifiers: [],
+    notes: null,
+    imageUrl: firstCleanString([version.thumb]),
+    uri: getDiscogsUri(version.uri, releaseId),
+    resourceUrl: firstCleanString([version.resource_url]),
+    detailLoaded: false,
+  };
+}
+
+function normalizeReleaseDetailCandidate(
+  release: DiscogsReleaseDetailResponse,
+): PressingCandidate | null {
+  const releaseId = release.id;
+  const title = firstCleanString([release.title]);
+
+  if (!releaseId || !title) {
+    return null;
+  }
+
+  const identifiers = (release.identifiers ?? [])
+    .map(normalizeDiscogsIdentifier)
+    .filter((identifier): identifier is PressingIdentifier => Boolean(identifier));
+  const labels = uniqueCleanStrings(
+    (release.labels ?? []).map((label) => label.name),
+  );
+  const catalogNumbers = uniqueCleanStrings(
+    (release.labels ?? []).map((label) => label.catno),
+  );
+  const lowerTypeIncludes = (identifier: PressingIdentifier, needle: string) =>
+    identifier.type.toLowerCase().includes(needle);
+  const barcodes = uniqueCleanStrings(
+    identifiers
+      .filter((identifier) => lowerTypeIncludes(identifier, "barcode"))
+      .map((identifier) => identifier.value),
+  );
+  const matrixRunouts = uniqueCleanStrings(
+    identifiers
+      .filter(
+        (identifier) =>
+          lowerTypeIncludes(identifier, "matrix") ||
+          lowerTypeIncludes(identifier, "runout"),
+      )
+      .map((identifier) => identifier.value),
+  );
+  const pressingPlants = uniqueCleanStrings(
+    (release.companies ?? [])
+      .filter((company) => {
+        const role = company.entity_type_name?.toLowerCase() ?? "";
+
+        return (
+          role.includes("pressed") ||
+          role.includes("manufactured") ||
+          role.includes("made by")
+        );
+      })
+      .map((company) => company.name),
+  );
+  const masteringCredits = uniqueCleanStrings(
+    (release.extraartists ?? [])
+      .filter((artist) => {
+        const role = artist.role?.toLowerCase() ?? "";
+
+        return (
+          role.includes("master") ||
+          role.includes("lacquer") ||
+          role.includes("cut")
+        );
+      })
+      .map((artist) =>
+        artist.role && artist.name ? `${artist.name} (${artist.role})` : artist.name,
+      ),
+  );
+  const primaryImage =
+    release.images?.find((image) => image.type === "primary") ??
+    release.images?.[0];
+
+  return {
+    id: releaseId,
+    masterId: release.master_id ?? null,
+    title,
+    artist: firstCleanString(release.artists?.map((artist) => artist.name) ?? []),
+    country: firstCleanString([release.country]),
+    year: parseDiscogsYear(release.year, release.released),
+    formats: normalizeDiscogsFormat(release.formats),
+    labels,
+    catalogNumbers,
+    barcodes,
+    matrixRunouts,
+    pressingPlants,
+    masteringCredits,
+    identifiers,
+    notes: firstCleanString([release.notes]),
+    imageUrl: firstCleanString([
+      primaryImage?.uri150,
+      primaryImage?.resource_url,
+      primaryImage?.uri,
+      release.thumb,
+    ]),
+    uri: getDiscogsUri(release.uri, releaseId),
+    resourceUrl: firstCleanString([release.resource_url]),
+    detailLoaded: true,
+  };
+}
+
 function normalizeDiscogsCollectionRelease(
   item: NonNullable<DiscogsCollectionResponse["releases"]>[number],
+  fieldNames?: DiscogsCollectionFieldMap | null,
 ): DiscogsCollectionRelease | null {
   const basicInformation = item.basic_information;
   const releaseId = basicInformation?.id ?? item.id;
@@ -377,6 +749,8 @@ function normalizeDiscogsCollectionRelease(
       basicInformation?.cover_image,
       basicInformation?.thumb,
     ]),
+    mediaCondition: getConditionNoteValue(item.notes, fieldNames, "media"),
+    sleeveCondition: getConditionNoteValue(item.notes, fieldNames, "sleeve"),
   };
 }
 
@@ -414,6 +788,44 @@ export async function getDiscogsIdentity(input: {
   };
 }
 
+export async function getDiscogsCollectionFields(input: {
+  username: string;
+  token: string;
+  userAgent: string;
+}): Promise<DiscogsCollectionFields> {
+  const response = await fetch(
+    `https://api.discogs.com/users/${encodeURIComponent(
+      input.username,
+    )}/collection/fields`,
+    {
+      headers: authHeaders(input),
+      cache: "no-store",
+    },
+  );
+  const rateLimit = readDiscogsRateLimit(response.headers);
+
+  if (!response.ok) {
+    throw await createDiscogsApiError(response);
+  }
+
+  const payload = (await response.json()) as DiscogsCollectionFieldsResponse;
+  const fields = new Map<number, string>();
+
+  for (const field of payload.fields ?? []) {
+    const id = field.id ?? field.field_id;
+    const name = firstCleanString([field.name]);
+
+    if (typeof id === "number" && name) {
+      fields.set(id, name);
+    }
+  }
+
+  return {
+    fields,
+    rateLimit,
+  };
+}
+
 export async function getDiscogsCollectionPage(input: {
   username: string;
   folderId?: number;
@@ -421,6 +833,7 @@ export async function getDiscogsCollectionPage(input: {
   perPage: number;
   token: string;
   userAgent: string;
+  fieldNames?: DiscogsCollectionFieldMap | null;
 }): Promise<DiscogsCollectionPage> {
   const searchParams = new URLSearchParams({
     page: String(input.page),
@@ -453,10 +866,105 @@ export async function getDiscogsCollectionPage(input: {
     totalPages: pagination.pages ?? input.page,
     totalItems: pagination.items ?? 0,
     releases: (payload.releases ?? [])
-      .map(normalizeDiscogsCollectionRelease)
+      .map((release) =>
+        normalizeDiscogsCollectionRelease(release, input.fieldNames),
+      )
       .filter((release): release is DiscogsCollectionRelease => Boolean(release)),
     rateLimit,
   };
+}
+
+export async function getDiscogsMasterVersions(input: {
+  masterId: number;
+  page: number;
+  perPage: number;
+  token: string;
+  userAgent: string;
+  cacheTtlMs?: number;
+}): Promise<DiscogsMasterVersionsPage> {
+  return getOrSetApiCache(
+    apiCacheKeys.discogsMasterVersions(
+      input.masterId,
+      input.page,
+      input.perPage,
+    ),
+    input.cacheTtlMs ?? 0,
+    async () => {
+      const searchParams = new URLSearchParams({
+        page: String(input.page),
+        per_page: String(input.perPage),
+      });
+      const response = await fetch(
+        `https://api.discogs.com/masters/${input.masterId}/versions?${searchParams}`,
+        {
+          headers: authHeaders(input),
+          cache: "no-store",
+        },
+      );
+      const rateLimit = readDiscogsRateLimit(response.headers);
+
+      if (!response.ok) {
+        throw await createDiscogsApiError(response);
+      }
+
+      const payload = (await response.json()) as DiscogsMasterVersionsResponse;
+      const pagination = payload.pagination ?? {};
+
+      return {
+        page: pagination.page ?? input.page,
+        perPage: pagination.per_page ?? input.perPage,
+        totalPages: pagination.pages ?? input.page,
+        totalItems: pagination.items ?? payload.versions?.length ?? 0,
+        versions: (payload.versions ?? [])
+          .map((version) =>
+            normalizeMasterVersionCandidate(version, input.masterId),
+          )
+          .filter((version): version is PressingCandidate => Boolean(version)),
+        rateLimit,
+      };
+    },
+  );
+}
+
+export async function getDiscogsReleaseDetail(input: {
+  releaseId: number;
+  token: string;
+  userAgent: string;
+  cacheTtlMs?: number;
+}): Promise<PressingCandidate> {
+  return getOrSetApiCache(
+    apiCacheKeys.discogsRelease(input.releaseId),
+    input.cacheTtlMs ?? 0,
+    async () => {
+      const response = await fetch(
+        `https://api.discogs.com/releases/${input.releaseId}`,
+        {
+          headers: authHeaders(input),
+          cache: "no-store",
+        },
+      );
+
+      if (!response.ok) {
+        throw await createDiscogsApiError(response);
+      }
+
+      const payload = (await response.json()) as DiscogsReleaseDetailResponse;
+      const candidate = normalizeReleaseDetailCandidate(payload);
+
+      if (!candidate) {
+        throw new DiscogsApiError({
+          code: "discogs_provider_error",
+          message: "Discogs release detail did not include usable release data.",
+          status: 502,
+          retryAfterSeconds: null,
+          rateLimit: readDiscogsRateLimit(response.headers),
+          providerMessage: null,
+        });
+      }
+
+      return candidate;
+    },
+  );
 }
 
 export async function searchDiscogsForUnit(input: {

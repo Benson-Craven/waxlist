@@ -1,13 +1,18 @@
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 import {
   ArrowRight,
   Archive,
+  AlertTriangle,
   BarChart3,
+  CheckCircle2,
+  Clock3,
   Disc3,
   Heart,
   LayoutDashboard,
   Map,
-  PanelRight,
   Radar,
   RefreshCw,
   Search,
@@ -15,73 +20,44 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Status,
   StatusIndicator,
   StatusLabel,
 } from "@/components/ui/status";
+import { GlobalWorkspaceSearch } from "@/components/app-shell/global-workspace-search";
+import { SelectedRecordInspector } from "@/components/app-shell/selected-record-inspector";
 import { CollectionWorkspaceFrame } from "@/components/collection/collection-workspace";
 import { DiggingWorkspaceFrame } from "@/components/digging/digging-workspace";
+import { HealthWorkspaceFrame } from "@/components/insights/health-workspace";
 import { ShelfWorkspaceFrame } from "@/components/shelf/shelf-workspace";
 import { ConnectedWorkspace } from "@/components/spotify/connected-workspace";
 import { WantlistWorkspaceFrame } from "@/components/wantlist/wantlist-workspace";
 import { APP_NAME, SPOTIFY_AUTH_LOGOUT_PATH } from "@/lib/constants";
 import type { SpotifyWorkspaceSnapshot } from "@/lib/spotify/workspace";
 import { cn } from "@/lib/utils";
+import type { SelectedRecord } from "@/lib/workspace/selected-record";
+import type { WorkspaceSummary } from "@/lib/workspace/summary";
+import {
+  WORKSPACE_VIEW_DEFINITIONS,
+  type WorkspaceViewId,
+} from "@/lib/workspace/views";
 
-export const WORKSPACE_VIEWS = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    description: "Collector cockpit overview and quick workspace launchers.",
-    icon: LayoutDashboard,
-  },
-  {
-    id: "crate",
-    label: "Crate",
-    description: "Spotify intake, Discogs matching, and vinyl recommendations.",
-    icon: Disc3,
-  },
-  {
-    id: "collection",
-    label: "Collection",
-    description: "Fast owned-record search with duplicate and shelf signals.",
-    icon: Archive,
-  },
-  {
-    id: "wantlist",
-    label: "Wantlist",
-    description: "Priority, price ceiling, shipping, and ignore rules.",
-    icon: Heart,
-  },
-  {
-    id: "digging",
-    label: "Digging",
-    description: "Record-shop lookup for owned, wanted, and duplicate status.",
-    icon: Search,
-  },
-  {
-    id: "shelf",
-    label: "Shelf",
-    description: "Room, unit, shelf, slot, and missing-location views.",
-    icon: Map,
-  },
-  {
-    id: "insights",
-    label: "Insights",
-    description: "Duplicates, high-value records, gaps, and recent adds.",
-    icon: BarChart3,
-  },
-  {
-    id: "profile",
-    label: "Profile",
-    description: "Connected Spotify account details and session controls.",
-    icon: UserRound,
-  },
-] as const;
+const WORKSPACE_ICONS = {
+  dashboard: LayoutDashboard,
+  crate: Disc3,
+  collection: Archive,
+  wantlist: Heart,
+  digging: Search,
+  shelf: Map,
+  insights: BarChart3,
+  profile: UserRound,
+} satisfies Record<WorkspaceViewId, typeof LayoutDashboard>;
 
-export type WorkspaceViewId = (typeof WORKSPACE_VIEWS)[number]["id"];
+const WORKSPACE_VIEWS = WORKSPACE_VIEW_DEFINITIONS.map((view) => ({
+  ...view,
+  icon: WORKSPACE_ICONS[view.id],
+}));
 
 type WorkspaceProfile = {
   displayName: string | null;
@@ -96,6 +72,8 @@ type AppShellProps = {
   activeView: WorkspaceViewId;
   profile: WorkspaceProfile | null;
   initialSpotifyWorkspace?: SpotifyWorkspaceSnapshot | null;
+  initialWorkspaceSummary?: WorkspaceSummary | null;
+  initialSearchQuery?: string;
 };
 
 function getViewHref(viewId: WorkspaceViewId) {
@@ -139,19 +117,41 @@ function WorkspaceNav({ activeView }: { activeView: WorkspaceViewId }) {
 
 function WorkspaceConnectionStatus({
   profile,
+  summary,
 }: {
   profile: WorkspaceProfile | null;
+  summary: WorkspaceSummary | null;
 }) {
+  const latestImport = summary?.latestImportRun;
+  const status = latestImport?.status === "failed"
+    ? "offline"
+    : latestImport?.status === "running" || latestImport?.status === "rate_limited"
+      ? "maintenance"
+      : profile
+        ? "online"
+        : "maintenance";
+  const label = latestImport
+    ? latestImport.status === "completed"
+      ? "Import current"
+      : latestImport.status === "failed"
+        ? "Import failed"
+        : latestImport.status === "rate_limited"
+          ? "Rate limited"
+          : "Import running"
+    : profile
+      ? "No import yet"
+      : "Syncing Spotify";
+
   return (
     <Status
-      status={profile ? "online" : "maintenance"}
+      status={status}
       className="h-8 border-white/10 bg-white/8 px-3 text-xs text-[#FFF4E8] backdrop-blur"
       role="status"
-      aria-label={profile ? "Workspace status: online" : "Workspace status: syncing"}
+      aria-label={`Workspace status: ${label}`}
     >
       <StatusIndicator />
       <StatusLabel className="text-[#FFF4E8]/72">
-        {profile ? "Online" : "Syncing Spotify"}
+        {label}
       </StatusLabel>
     </Status>
   );
@@ -176,63 +176,109 @@ function ProfileNavLink({ activeView }: { activeView: WorkspaceViewId }) {
   );
 }
 
-function SyncStatus({ profile }: { profile: WorkspaceProfile | null }) {
+function formatRelativeImportTime(value: string | null | undefined) {
+  if (!value) {
+    return "Not imported yet";
+  }
+
+  const timestamp = Date.parse(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return "Import time unavailable";
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function getImportStatusCopy(summary: WorkspaceSummary | null) {
+  const run = summary?.latestImportRun;
+
+  if (!run) {
+    return {
+      title: "Not imported yet",
+      body: "Connect Discogs import from Collection to populate owned records and shelf status.",
+      icon: Clock3,
+      tone: "border-[#FFF4E8]/12 bg-[#FFF4E8]/6 text-[#FFF4E8]/62",
+    };
+  }
+
+  if (run.status === "failed") {
+    return {
+      title: "Import failed",
+      body: `${run.importedCount.toLocaleString()} records imported before the last error. Resume from Collection.`,
+      icon: AlertTriangle,
+      tone: "border-[#D34278]/24 bg-[#D34278]/9 text-[#FFD7E4]",
+    };
+  }
+
+  if (run.status === "rate_limited") {
+    return {
+      title: "Rate limited",
+      body: run.retryAfterSeconds
+        ? `Discogs asked WAXLIST to wait about ${run.retryAfterSeconds.toLocaleString()} seconds.`
+        : "Discogs rate limit reached. Resume import shortly.",
+      icon: Clock3,
+      tone: "border-[#F08A4B]/24 bg-[#F08A4B]/9 text-[#FFE1C7]",
+    };
+  }
+
+  if (run.status === "running") {
+    return {
+      title: "Import in progress",
+      body: `${run.importedCount.toLocaleString()}${run.totalItems ? ` of ${run.totalItems.toLocaleString()}` : ""} records imported so far.`,
+      icon: RefreshCw,
+      tone: "border-[#1DB954]/22 bg-[#1DB954]/9 text-[#C8F7D8]",
+    };
+  }
+
+  return {
+    title: "Import completed",
+    body: `${run.importedCount.toLocaleString()} records imported. Last sync ${formatRelativeImportTime(run.completedAt ?? run.updatedAt)}.`,
+    icon: CheckCircle2,
+    tone: "border-[#1DB954]/22 bg-[#1DB954]/9 text-[#C8F7D8]",
+  };
+}
+
+function SyncStatus({
+  profile,
+  summary,
+}: {
+  profile: WorkspaceProfile | null;
+  summary: WorkspaceSummary | null;
+}) {
   const profileLabel = profile?.displayName ?? profile?.id ?? "Spotify session";
+  const importStatus = getImportStatusCopy(summary);
+  const ImportIcon = importStatus.icon;
 
   return (
     <section
-      className="rounded-2xl border border-[#FFF4E8]/12 bg-[#FFF4E8]/6 p-4"
+      className={cn("rounded-2xl border p-4", importStatus.tone)}
       aria-labelledby="sync-status-heading"
     >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 rounded-full border border-[#1DB954]/30 bg-[#1DB954]/14 p-2 text-[#1DB954]">
-          <RefreshCw className="size-4" aria-hidden="true" />
+        <div className="mt-0.5 rounded-full border border-current/20 bg-current/10 p-2">
+          <ImportIcon className="size-4" aria-hidden="true" />
         </div>
         <div>
           <h2
             id="sync-status-heading"
             className="text-sm font-semibold text-[#FFF4E8]"
           >
-            Sync status
+            {importStatus.title}
           </h2>
           <p className="mt-1 text-xs leading-5 text-[#FFF4E8]/58">
-            {profileLabel} connected. Collection import has not run yet.
+            {profileLabel} connected. {importStatus.body}
           </p>
         </div>
       </div>
     </section>
   );
 }
-
-const DASHBOARD_ACTIONS = [
-  {
-    id: "crate",
-    label: "Build a crate",
-    description: "Turn saved albums or playlists into ranked vinyl matches.",
-    href: "/app?view=crate",
-    icon: Disc3,
-    tone: "from-[#D34278]/24 to-[#F08A4B]/14",
-    stat: "Spotify + Discogs",
-  },
-  {
-    id: "collection",
-    label: "Search collection",
-    description: "Open the owned and wanted record browser.",
-    href: "/app?view=collection",
-    icon: Archive,
-    tone: "from-[#6D2AA8]/24 to-[#D34278]/10",
-    stat: "Shelf-aware",
-  },
-  {
-    id: "digging",
-    label: "Digging mode",
-    description: "Fast shop lookup for owned, wanted, and duplicate checks.",
-    href: "/app?view=digging",
-    icon: Radar,
-    tone: "from-[#1DB954]/18 to-[#6D2AA8]/12",
-    stat: "Mobile-first",
-  },
-] as const;
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -249,14 +295,88 @@ const DASHBOARD_SHORTCUTS = [
   },
   {
     id: "insights",
-    label: "Insights",
+    label: "Health",
     href: "/app?view=insights",
     icon: BarChart3,
   },
 ] as const;
 
-function DashboardHome({ profile }: { profile: WorkspaceProfile | null }) {
+function DashboardHome({
+  profile,
+  summary,
+}: {
+  profile: WorkspaceProfile | null;
+  summary: WorkspaceSummary | null;
+}) {
   const profileLabel = profile?.displayName ?? profile?.id ?? "Collector";
+  const importStatus = getImportStatusCopy(summary);
+  const dashboardMetrics = [
+    {
+      id: "collection",
+      label: "Collection records",
+      value: summary?.collectionCount ?? 0,
+      href: "/app?view=collection",
+    },
+    {
+      id: "owned",
+      label: "Owned",
+      value: summary?.ownedCount ?? 0,
+      href: "/app?view=collection",
+    },
+    {
+      id: "wanted",
+      label: "Wanted",
+      value: summary?.wantedCount ?? 0,
+      href: "/app?view=wantlist",
+    },
+    {
+      id: "missing-location",
+      label: "Missing location",
+      value: summary?.missingLocationCount ?? 0,
+      href: "/app?view=shelf",
+    },
+    {
+      id: "duplicates",
+      label: "Duplicate groups",
+      value: summary?.duplicateCount ?? 0,
+      href: "/app?view=insights",
+    },
+    {
+      id: "priority-wants",
+      label: "Priority wants",
+      value: summary?.priorityWantlistCount ?? 0,
+      href: "/app?view=wantlist",
+    },
+  ];
+  const actionRows = [
+    {
+      id: "import",
+      label: summary?.latestImportRun ? "Review Discogs sync" : "Import Discogs collection",
+      description: importStatus.body,
+      href: "/app?view=collection",
+      icon: summary?.latestImportRun?.status === "failed" ? AlertTriangle : RefreshCw,
+    },
+    {
+      id: "shelf",
+      label: "Resolve missing shelf locations",
+      description:
+        summary && summary.missingLocationCount > 0
+          ? `${summary.missingLocationCount.toLocaleString()} owned records need room, unit, shelf, or slot.`
+          : "Shelf location gaps will appear after owned records are imported.",
+      href: "/app?view=shelf",
+      icon: Map,
+    },
+    {
+      id: "digging",
+      label: "Open Digging mode",
+      description:
+        summary && summary.collectionCount > 0
+          ? "Use imported data for owned, wanted, duplicate, and shelf checks."
+          : "Digging mode becomes useful after import or wishlist seeding.",
+      href: "/app?view=digging",
+      icon: Radar,
+    },
+  ];
 
   return (
     <section
@@ -274,45 +394,55 @@ function DashboardHome({ profile }: { profile: WorkspaceProfile | null }) {
           What are you working on, {profileLabel}?
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-sm leading-6 text-[#FFF4E8]/58">
-          Choose a focused workspace. Each area opens as its own surface so the
-          dashboard stays clean.
+          Live collection, wantlist, shelf, duplicate, and import signals from
+          the current workspace.
         </p>
       </div>
 
-      <div className="mt-10 grid gap-4 lg:grid-cols-3">
-        {DASHBOARD_ACTIONS.map((action) => {
+      <div className="mt-10 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {dashboardMetrics.map((metric) => (
+          <Link
+            key={metric.id}
+            href={metric.href}
+            className="rounded-xl border border-[#FFF4E8]/10 bg-[#121014] p-4 transition hover:border-[#FFF4E8]/22 hover:bg-[#171219]"
+          >
+            <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
+              {metric.label}
+            </p>
+            <p className="mt-3 text-3xl font-semibold tabular-nums text-[#FFF4E8]">
+              {metric.value.toLocaleString()}
+            </p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-3">
+        {actionRows.map((action) => {
           const Icon = action.icon;
 
           return (
             <Link
               key={action.id}
               href={action.href}
-              className="group min-h-56 overflow-hidden rounded-2xl border border-[#FFF4E8]/10 bg-[#121014] transition hover:-translate-y-0.5 hover:border-[#FFF4E8]/22 hover:bg-[#171219]"
+              className="group flex items-center justify-between gap-4 rounded-xl border border-[#FFF4E8]/10 bg-[#FFF4E8]/5 px-4 py-4 text-left transition hover:border-[#FFF4E8]/20 hover:bg-[#FFF4E8]/9"
             >
-              <span
-                className={`block h-24 bg-gradient-to-br ${action.tone} p-4`}
-              >
-                <span className="inline-grid size-10 place-items-center rounded-full border border-[#FFF4E8]/16 bg-[#05030A]/56 text-[#FFF4E8]">
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="grid size-10 shrink-0 place-items-center rounded-full border border-[#FFF4E8]/16 bg-[#05030A]/56 text-[#FFF4E8]">
                   <Icon className="size-5" aria-hidden="true" />
                 </span>
-              </span>
-              <span className="block p-5">
-                <span className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/42">
-                  {action.stat}
-                </span>
-                <span className="mt-3 flex items-center justify-between gap-3">
-                  <span className="text-lg font-semibold text-[#FFF4E8]">
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-[#FFF4E8]">
                     {action.label}
                   </span>
-                  <ArrowRight
-                    className="size-4 text-[#FFF4E8]/44 transition group-hover:translate-x-0.5 group-hover:text-[#FFF4E8]"
-                    aria-hidden="true"
-                  />
-                </span>
-                <span className="mt-2 block text-sm leading-6 text-[#FFF4E8]/56">
-                  {action.description}
+                  <span className="mt-1 block text-sm leading-5 text-[#FFF4E8]/54">
+                    {action.description}
+                  </span>
                 </span>
               </span>
+              <ArrowRight
+                className="size-4 shrink-0 text-[#FFF4E8]/36 transition group-hover:translate-x-0.5 group-hover:text-[#FFF4E8]/70"
+                aria-hidden="true"
+              />
             </Link>
           );
         })}
@@ -341,33 +471,6 @@ function DashboardHome({ profile }: { profile: WorkspaceProfile | null }) {
         })}
       </div>
     </section>
-  );
-}
-
-function RecordInspector() {
-  return (
-    <aside
-      className="flex min-h-[24rem] flex-col rounded-2xl border border-[#FFF4E8]/12 bg-[#08030f]/72 p-4 shadow-2xl shadow-black/20"
-      aria-labelledby="record-inspector-heading"
-    >
-      <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-        <PanelRight className="size-4" aria-hidden="true" />
-        <p className="text-xs uppercase tracking-[0.24em]">Inspector</p>
-      </div>
-      <div className="mt-8 flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 px-5 text-center">
-        <Disc3 className="size-9 text-[#FFF4E8]/38" aria-hidden="true" />
-        <h2
-          id="record-inspector-heading"
-          className="mt-4 text-base font-semibold text-[#FFF4E8]"
-        >
-          No record selected
-        </h2>
-        <p className="mt-2 max-w-xs text-sm leading-6 text-[#FFF4E8]/58">
-          Record details, shelf location, wantlist state, and Discogs context
-          will appear here.
-        </p>
-      </div>
-    </aside>
   );
 }
 
@@ -553,15 +656,20 @@ export function AppShell({
   activeView,
   profile,
   initialSpotifyWorkspace,
+  initialWorkspaceSummary = null,
+  initialSearchQuery = "",
 }: AppShellProps) {
   const activeWorkspaceView = getActiveView(activeView);
-  const showUtilityHeader =
-    activeView !== "collection" &&
-    activeView !== "wantlist" &&
-    activeView !== "digging" &&
-    activeView !== "shelf" &&
-    activeView !== "crate" &&
-    activeView !== "profile";
+  const [selectedRecord, setSelectedRecord] = useState<SelectedRecord | null>(
+    null,
+  );
+  const hasSharedInspector =
+    activeView === "collection" ||
+    activeView === "wantlist" ||
+    activeView === "digging" ||
+    activeView === "shelf" ||
+    activeView === "insights";
+  const activeViewKey = `${activeView}:${initialSearchQuery}`;
 
   return (
     <main className="min-h-screen bg-[#05030A] text-[#FFF4E8]">
@@ -592,7 +700,10 @@ export function AppShell({
           </div>
 
           <div className="mt-5">
-            <WorkspaceConnectionStatus profile={profile} />
+            <WorkspaceConnectionStatus
+              profile={profile}
+              summary={initialWorkspaceSummary}
+            />
           </div>
 
           <div className="mt-5 lg:mt-8">
@@ -618,46 +729,76 @@ export function AppShell({
         </aside>
 
         <div className="flex min-w-0 flex-col gap-5">
-          {showUtilityHeader ? (
-            <header className="rounded-2xl border border-[#FFF4E8]/8 bg-[#08030f]/46 p-4 shadow-2xl shadow-black/20">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/45">
-                    Workspace
-                  </p>
-                  <h1 className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
-                    {activeWorkspaceView.label}
-                  </h1>
-                </div>
-                <div className="relative w-full xl:max-w-xl">
-                  <Search
-                    className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#FFF4E8]/38"
-                    aria-hidden="true"
-                  />
-                  <Input
-                    type="search"
-                    placeholder="Search collection, wantlist, barcode, catalog"
-                    className="h-11 rounded-full border-[#FFF4E8]/14 bg-[#FFF4E8]/8 pl-10 pr-4 text-[#FFF4E8] placeholder:text-[#FFF4E8]/36 focus-visible:border-[#FFF4E8]/30 focus-visible:ring-[#FFF4E8]/12"
-                    aria-label="Global collection search"
-                  />
-                </div>
+          <header className="rounded-2xl border border-[#FFF4E8]/8 bg-[#08030f]/46 p-4 shadow-2xl shadow-black/20">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/45">
+                  Workspace
+                </p>
+                <h1 className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
+                  {activeWorkspaceView.label}
+                </h1>
               </div>
-              <div className="mt-4 lg:hidden">
-                <SyncStatus profile={profile} />
-              </div>
-            </header>
-          ) : null}
+              <GlobalWorkspaceSearch
+                key={`${activeView}:${initialSearchQuery}`}
+                activeView={activeView}
+                initialQuery={initialSearchQuery}
+              />
+            </div>
+            <div className="mt-4 lg:hidden">
+              <SyncStatus
+                profile={profile}
+                summary={initialWorkspaceSummary}
+              />
+            </div>
+          </header>
 
           {activeView === "dashboard" ? (
-            <DashboardHome profile={profile} />
-          ) : activeView === "collection" ? (
-            <CollectionWorkspaceFrame />
-          ) : activeView === "wantlist" ? (
-            <WantlistWorkspaceFrame />
-          ) : activeView === "digging" ? (
-            <DiggingWorkspaceFrame />
-          ) : activeView === "shelf" ? (
-            <ShelfWorkspaceFrame />
+            <DashboardHome
+              profile={profile}
+              summary={initialWorkspaceSummary}
+            />
+          ) : hasSharedInspector ? (
+            <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+              {activeView === "collection" ? (
+                <CollectionWorkspaceFrame
+                  key={activeViewKey}
+                  initialQuery={initialSearchQuery}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={setSelectedRecord}
+                />
+              ) : activeView === "wantlist" ? (
+                <WantlistWorkspaceFrame
+                  key={activeViewKey}
+                  initialQuery={initialSearchQuery}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={setSelectedRecord}
+                />
+              ) : activeView === "digging" ? (
+                <DiggingWorkspaceFrame
+                  key={activeViewKey}
+                  initialQuery={initialSearchQuery}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={setSelectedRecord}
+                />
+              ) : activeView === "shelf" ? (
+                <ShelfWorkspaceFrame
+                  key={activeViewKey}
+                  initialQuery={initialSearchQuery}
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={setSelectedRecord}
+                />
+              ) : (
+                <HealthWorkspaceFrame
+                  selectedRecord={selectedRecord}
+                  onSelectRecord={setSelectedRecord}
+                />
+              )}
+              <SelectedRecordInspector
+                record={selectedRecord}
+                onRecordChange={setSelectedRecord}
+              />
+            </div>
           ) : activeView === "crate" ? (
             <CrateWorkspace initialSpotifyWorkspace={initialSpotifyWorkspace} />
           ) : activeView === "profile" ? (
@@ -665,7 +806,10 @@ export function AppShell({
           ) : (
             <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
               <WorkspacePanel activeView={activeView} />
-              <RecordInspector />
+              <SelectedRecordInspector
+                record={selectedRecord}
+                onRecordChange={setSelectedRecord}
+              />
             </div>
           )}
         </div>

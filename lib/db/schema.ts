@@ -158,6 +158,51 @@ export const wishlistItems = pgTable(
   ],
 );
 
+export const smartWants = pgTable(
+  "smart_wants",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    masterReleaseId: integer("master_release_id").notNull(),
+    sourceReleaseId: integer("source_release_id"),
+    artist: text("artist").notNull(),
+    title: text("title").notNull(),
+    imageUrl: text("image_url"),
+    sourceUri: text("source_uri"),
+    rules: jsonb("rules").$type<{
+      formats: string[];
+      countries: string[];
+      yearFrom: number | null;
+      yearTo: number | null;
+      excludedTags: string[];
+      excludeOwned: boolean;
+      exactPressingRequired: boolean;
+      maxItemPrice: {
+        amountCents: number;
+        currency: string;
+      } | null;
+      minMediaCondition: string | null;
+      minSleeveCondition: string | null;
+    }>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("smart_wants_user_id_idx").on(table.userId),
+    index("smart_wants_master_release_id_idx").on(table.masterReleaseId),
+    index("smart_wants_user_master_idx").on(
+      table.userId,
+      table.masterReleaseId,
+    ),
+  ],
+);
+
 export const collectionItems = pgTable(
   "collection_items",
   {
@@ -177,6 +222,8 @@ export const collectionItems = pgTable(
     catalogNumber: text("catalog_number"),
     barcode: text("barcode"),
     imageUrl: text("image_url"),
+    mediaCondition: text("media_condition"),
+    sleeveCondition: text("sleeve_condition"),
     status: collectionItemStatus("status").notNull(),
     tags: jsonb("tags").$type<string[]>().notNull(),
     notes: text("notes"),

@@ -99,6 +99,12 @@ export const apiCacheKeys = {
   discogsMarketplace(releaseId: number) {
     return `discogs:marketplace:${releaseId}`;
   },
+  discogsMasterVersions(masterId: number, page: number, perPage: number) {
+    return `discogs:master:${masterId}:versions:${page}:${perPage}`;
+  },
+  discogsRelease(releaseId: number) {
+    return `discogs:release:${releaseId}`;
+  },
 } as const;
 
 export async function getOrSetApiCache<T>(

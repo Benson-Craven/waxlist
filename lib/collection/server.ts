@@ -39,6 +39,46 @@ export async function resolveCollectionOwner(
   return owner;
 }
 
+export async function resolveCollectionOwnerFromSpotifyProfile(input: {
+  spotifyUserId: string;
+  displayName?: string | null;
+  imageUrl?: string | null;
+}): Promise<CollectionOwner | null> {
+  if (!input.spotifyUserId) {
+    return null;
+  }
+
+  const { db, schema } = await loadDatabase();
+  const now = new Date();
+  const [user] = await db
+    .insert(schema.users)
+    .values({
+      spotifyUserId: input.spotifyUserId,
+      displayName: input.displayName ?? null,
+      imageUrl: input.imageUrl ?? null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: schema.users.spotifyUserId,
+      set: {
+        displayName: input.displayName ?? null,
+        imageUrl: input.imageUrl ?? null,
+        updatedAt: now,
+      },
+    })
+    .returning({
+      id: schema.users.id,
+    });
+
+  return user
+    ? {
+        type: "user",
+        userId: user.id,
+        sessionIdHash: null,
+      }
+    : null;
+}
+
 function ownerFilter(
   owner: CollectionOwner,
   schema: Awaited<ReturnType<typeof loadDatabase>>["schema"],
@@ -116,6 +156,8 @@ export async function seedCollectionFromWishlist(owner: CollectionOwner) {
       catalogNumber: null,
       barcode: null,
       imageUrl: record.thumb,
+      mediaCondition: null,
+      sleeveCondition: null,
       status: "wanted" as const,
       tags: ["wishlist"],
       notes: null,

@@ -13,8 +13,10 @@ import { db } from "@/lib/db/client";
 import { collectionItems, discogsImportRuns } from "@/lib/db/schema";
 import {
   DiscogsApiError,
+  getDiscogsCollectionFields,
   getDiscogsCollectionPage,
   getDiscogsIdentity,
+  type DiscogsCollectionFieldMap,
   type DiscogsCollectionRelease,
   type DiscogsRateLimit,
 } from "@/lib/discogs/client";
@@ -132,6 +134,8 @@ function toCollectionInsert(input: {
     catalogNumber: input.release.catalogNumber,
     barcode: input.release.barcode,
     imageUrl: input.release.imageUrl,
+    mediaCondition: input.release.mediaCondition,
+    sleeveCondition: input.release.sleeveCondition,
     status: "owned" as const,
     tags: ["discogs-import"],
     notes: null,
@@ -249,6 +253,8 @@ async function upsertCollectionRelease(input: {
         catalogNumber: value.catalogNumber,
         barcode: value.barcode,
         imageUrl: value.imageUrl,
+        mediaCondition: value.mediaCondition,
+        sleeveCondition: value.sleeveCondition,
         status: "owned",
         syncedAt: value.syncedAt,
         updatedAt: value.updatedAt,
@@ -321,6 +327,7 @@ export async function runDiscogsCollectionImport(input: {
   let failedCount = run.failedCount;
   let failures = run.failures;
   let latestRateLimit = run.rateLimit;
+  let collectionFieldNames: DiscogsCollectionFieldMap | null = null;
   const now = new Date();
 
   if (!username) {
@@ -343,6 +350,19 @@ export async function runDiscogsCollectionImport(input: {
     });
   }
 
+  try {
+    const collectionFields = await getDiscogsCollectionFields({
+      username,
+      token: env.token,
+      userAgent: env.userAgent,
+    });
+
+    collectionFieldNames = collectionFields.fields;
+    latestRateLimit = collectionFields.rateLimit;
+  } catch {
+    collectionFieldNames = null;
+  }
+
   let nextPage = run.nextPage;
   let totalPages = run.totalPages;
   let totalItems = run.totalItems;
@@ -360,6 +380,7 @@ export async function runDiscogsCollectionImport(input: {
         perPage: run.perPage,
         token: env.token,
         userAgent: env.userAgent,
+        fieldNames: collectionFieldNames,
       });
 
       latestRateLimit = page.rateLimit;

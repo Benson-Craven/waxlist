@@ -28,12 +28,18 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartWantsWorkspace } from "@/components/wantlist/smart-wants-panel";
 import {
   normalizeWishlistRecord,
   type WishlistBuyingControls,
   type WishlistRecord,
 } from "@/lib/wishlist/record";
 import { cn } from "@/lib/utils";
+import {
+  SELECTED_RECORD_CHANGED_EVENT,
+  selectedRecordFromWishlist,
+  type SelectedRecord,
+} from "@/lib/workspace/selected-record";
 
 type WishlistPayload = {
   records?: unknown;
@@ -51,6 +57,7 @@ type WishlistSavePayload = {
 
 type WantlistTab = "all" | "priced" | "available" | "bundle";
 type WantlistView = "list" | "grid";
+type WantlistMode = "exact" | "smart";
 
 const WANTLIST_TABS: Array<{
   id: WantlistTab;
@@ -524,10 +531,14 @@ function WantlistList({
   records,
   recordsByArtist,
   onSaveRecord,
+  selectedRecord,
+  onSelectRecord,
 }: {
   records: WishlistRecord[];
   recordsByArtist: Map<string, WishlistRecord[]>;
   onSaveRecord: (record: WishlistRecord) => Promise<void>;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: WishlistRecord) => void;
 }) {
   const [openRecordId, setOpenRecordId] = useState<string | null>(null);
 
@@ -536,11 +547,15 @@ function WantlistList({
       {records.map((record) => {
         const bundleCount = getBundleCount(record, recordsByArtist);
         const isControlsOpen = openRecordId === record.id;
+        const isSelected = selectedRecord?.wishlistId === record.id;
 
         return (
           <article
             key={record.id}
-            className="grid gap-4 py-4 lg:grid-cols-[minmax(0,1fr)_11rem]"
+            className={cn(
+              "grid gap-4 py-4 lg:grid-cols-[minmax(0,1fr)_11rem]",
+              isSelected && "bg-[#FFF4E8]/5",
+            )}
           >
             <div className="flex min-w-0 gap-4">
               <WantlistRecordArtwork record={record} />
@@ -600,6 +615,15 @@ function WantlistList({
                       aria-hidden="true"
                     />
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onSelectRecord(record)}
+                    className="ml-2 h-9 rounded-full border-transparent bg-[#1b1b20] px-4 text-xs font-semibold text-[#FFF4E8]/68 hover:bg-[#24242a] hover:text-[#FFF4E8]"
+                  >
+                    <Disc3 className="size-3.5" aria-hidden="true" />
+                    Inspect
+                  </Button>
                 </div>
                 {isControlsOpen ? (
                   <div id={`buying-controls-${record.id}`}>
@@ -640,19 +664,27 @@ function WantlistList({
 function WantlistGrid({
   records,
   recordsByArtist,
+  selectedRecord,
+  onSelectRecord,
 }: {
   records: WishlistRecord[];
   recordsByArtist: Map<string, WishlistRecord[]>;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: WishlistRecord) => void;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {records.map((record) => {
         const bundleCount = getBundleCount(record, recordsByArtist);
+        const isSelected = selectedRecord?.wishlistId === record.id;
 
         return (
           <article
             key={record.id}
-            className="overflow-hidden rounded-2xl border border-[#FFF4E8]/8 bg-[#141418]"
+            className={cn(
+              "overflow-hidden rounded-2xl border bg-[#141418]",
+              isSelected ? "border-[#FFF4E8]/24" : "border-[#FFF4E8]/8",
+            )}
           >
             <div className="flex gap-4 p-4">
               <WantlistRecordArtwork record={record} />
@@ -682,6 +714,15 @@ function WantlistGrid({
                 <span>Seller verification pending</span>
               </div>
               <BuyingControlSummary record={record} />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onSelectRecord(record)}
+                className="mt-4 h-9 rounded-full border-transparent bg-[#1b1b20] px-4 text-xs font-semibold text-[#FFF4E8]/68 hover:bg-[#24242a] hover:text-[#FFF4E8]"
+              >
+                <Disc3 className="size-3.5" aria-hidden="true" />
+                Inspect
+              </Button>
             </div>
           </article>
         );
@@ -723,11 +764,20 @@ function EmptyWantlist({
   );
 }
 
-export function WantlistWorkspaceFrame() {
+export function WantlistWorkspaceFrame({
+  initialQuery = "",
+  selectedRecord,
+  onSelectRecord,
+}: {
+  initialQuery?: string;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: SelectedRecord | null) => void;
+}) {
   const [records, setRecords] = useState<WishlistRecord[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<WantlistTab>("all");
   const [view, setView] = useState<WantlistView>("list");
+  const [mode, setMode] = useState<WantlistMode>("exact");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const recordsByArtist = useMemo(() => {
@@ -770,7 +820,8 @@ export function WantlistWorkspaceFrame() {
       return buildSearchText(record).includes(nextQuery);
     });
   }, [activeTab, query, records, recordsByArtist]);
-  const hasActiveFilters = activeTab !== "all" || query.trim().length > 0;
+  const hasActiveFilters =
+    mode === "exact" && (activeTab !== "all" || query.trim().length > 0);
 
   function resetFilters() {
     setActiveTab("all");
@@ -785,6 +836,9 @@ export function WantlistWorkspaceFrame() {
         currentRecord.id === savedRecord.id ? savedRecord : currentRecord,
       ),
     );
+    if (selectedRecord?.wishlistId === savedRecord.id) {
+      onSelectRecord(selectedRecordFromWishlist(savedRecord));
+    }
   }
 
   useEffect(() => {
@@ -823,6 +877,53 @@ export function WantlistWorkspaceFrame() {
     };
   }, []);
 
+  useEffect(() => {
+    function handleSelectedRecordChange(event: Event) {
+      const selected = (event as CustomEvent<SelectedRecord | null>).detail;
+
+      if (!selected) {
+        return;
+      }
+
+      if (selected.wishlistRecord) {
+        const wishlistRecord = selected.wishlistRecord;
+
+        setRecords((currentRecords) => {
+          const hasRecord = currentRecords.some(
+            (record) => record.id === wishlistRecord.id,
+          );
+
+          return hasRecord
+            ? currentRecords.map((record) =>
+                record.id === wishlistRecord.id ? wishlistRecord : record,
+              )
+            : [wishlistRecord, ...currentRecords];
+        });
+        return;
+      }
+
+      if (selected.source === "wishlist") {
+        const removedId = selected.id.replace(/^wishlist:/, "");
+
+        setRecords((currentRecords) =>
+          currentRecords.filter((record) => record.id !== removedId),
+        );
+      }
+    }
+
+    window.addEventListener(
+      SELECTED_RECORD_CHANGED_EVENT,
+      handleSelectedRecordChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SELECTED_RECORD_CHANGED_EVENT,
+        handleSelectedRecordChange,
+      );
+    };
+  }, []);
+
   return (
     <section aria-labelledby="wantlist-heading">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -832,16 +933,46 @@ export function WantlistWorkspaceFrame() {
         >
           Wantlist
         </h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            onClick={() => setMode("exact")}
+            variant="outline"
+            className={cn(
+              "rounded-full border-transparent px-4",
+              mode === "exact"
+                ? "bg-[#FFF4E8] text-[#08030f]"
+                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+            )}
+          >
+            <Heart className="size-4" aria-hidden="true" />
+            Exact Wants
+          </Button>
+          <Button
+            type="button"
+            onClick={() => setMode("smart")}
+            variant="outline"
+            className={cn(
+              "rounded-full border-transparent px-4",
+              mode === "smart"
+                ? "bg-[#FFF4E8] text-[#08030f]"
+                : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+            )}
+          >
+            <SlidersHorizontal className="size-4" aria-hidden="true" />
+            Smart Wants
+          </Button>
           <Button
             type="button"
             onClick={() => setView("list")}
             variant="outline"
+            disabled={mode !== "exact"}
             className={cn(
               "rounded-full border-transparent px-4",
-              view === "list"
+              view === "list" && mode === "exact"
                 ? "bg-[#FFF4E8] text-[#08030f]"
                 : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+              mode !== "exact" && "opacity-45",
             )}
           >
             <List className="size-4" aria-hidden="true" />
@@ -851,11 +982,13 @@ export function WantlistWorkspaceFrame() {
             type="button"
             onClick={() => setView("grid")}
             variant="outline"
+            disabled={mode !== "exact"}
             className={cn(
               "rounded-full border-transparent px-4",
-              view === "grid"
+              view === "grid" && mode === "exact"
                 ? "bg-[#FFF4E8] text-[#08030f]"
                 : "bg-[#1b1b20] text-[#FFF4E8]/72 hover:bg-[#24242a] hover:text-[#FFF4E8]",
+              mode !== "exact" && "opacity-45",
             )}
           >
             <Grid2X2 className="size-4" aria-hidden="true" />
@@ -864,39 +997,41 @@ export function WantlistWorkspaceFrame() {
         </div>
       </div>
 
-      <div className="mt-5 flex gap-7 overflow-x-auto border-b border-[#FFF4E8]/10">
-        {WANTLIST_TABS.map((tab) => {
-          const isActive = activeTab === tab.id;
-          const count =
-            tab.id === "all"
-              ? records.length
-              : tab.id === "priced"
-                ? pricedCount
-                : tab.id === "available"
-                  ? availableCount
-                  : bundleCount;
+      {mode === "exact" ? (
+        <div className="mt-5 flex gap-7 overflow-x-auto border-b border-[#FFF4E8]/10">
+          {WANTLIST_TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            const count =
+              tab.id === "all"
+                ? records.length
+                : tab.id === "priced"
+                  ? pricedCount
+                  : tab.id === "available"
+                    ? availableCount
+                    : bundleCount;
 
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={cn(
-                "relative min-w-max pb-3 text-sm font-medium transition",
-                isActive
-                  ? "text-[#FFF4E8]"
-                  : "text-[#FFF4E8]/50 hover:text-[#FFF4E8]/78",
-              )}
-            >
-              {tab.label}
-              <span className="ml-2 text-xs text-[#FFF4E8]/36">{count}</span>
-              {isActive ? (
-                <span className="absolute inset-x-0 bottom-0 h-px bg-[#FFF4E8]" />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "relative min-w-max pb-3 text-sm font-medium transition",
+                  isActive
+                    ? "text-[#FFF4E8]"
+                    : "text-[#FFF4E8]/50 hover:text-[#FFF4E8]/78",
+                )}
+              >
+                {tab.label}
+                <span className="ml-2 text-xs text-[#FFF4E8]/36">{count}</span>
+                {isActive ? (
+                  <span className="absolute inset-x-0 bottom-0 h-px bg-[#FFF4E8]" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1">
@@ -908,11 +1043,14 @@ export function WantlistWorkspaceFrame() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search wanted vinyl"
+            placeholder={
+              mode === "smart" ? "Search Smart Wants" : "Search wanted vinyl"
+            }
             className="h-11 rounded-full border-transparent bg-[#1b1b20] pl-11 pr-4 text-[#FFF4E8] placeholder:text-[#FFF4E8]/38 focus-visible:border-[#FFF4E8]/18 focus-visible:ring-[#FFF4E8]/8"
           />
         </div>
-        <div className="flex flex-wrap gap-2">
+        {mode === "exact" ? (
+          <div className="flex flex-wrap gap-2">
           <Button
             type="button"
             variant="outline"
@@ -929,10 +1067,19 @@ export function WantlistWorkspaceFrame() {
             <ListFilter className="size-4" aria-hidden="true" />
             Best match
           </Button>
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-5">
+        {mode === "smart" ? (
+          <SmartWantsWorkspace
+            query={query}
+            selectedRecord={selectedRecord}
+            onSelectRecord={onSelectRecord}
+          />
+        ) : (
+          <>
         {error ? (
           <div className="rounded-xl border border-[#D34278]/24 bg-[#D34278]/8 p-4 text-sm leading-6 text-[#FFF4E8]/78">
             {error}
@@ -955,11 +1102,19 @@ export function WantlistWorkspaceFrame() {
               records={filteredRecords}
               recordsByArtist={recordsByArtist}
               onSaveRecord={saveRecord}
+              selectedRecord={selectedRecord}
+              onSelectRecord={(record) =>
+                onSelectRecord(selectedRecordFromWishlist(record))
+              }
             />
           ) : (
             <WantlistGrid
               records={filteredRecords}
               recordsByArtist={recordsByArtist}
+              selectedRecord={selectedRecord}
+              onSelectRecord={(record) =>
+                onSelectRecord(selectedRecordFromWishlist(record))
+              }
             />
           )
         ) : (
@@ -967,6 +1122,8 @@ export function WantlistWorkspaceFrame() {
             hasRecords={records.length > 0}
             onReset={resetFilters}
           />
+        )}
+          </>
         )}
       </div>
     </section>

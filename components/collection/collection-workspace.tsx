@@ -1,34 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Archive,
-  CheckCircle2,
-  Disc3,
+  BarChart3,
   Download,
   Filter,
-  Heart,
   ListFilter,
   Loader2,
   MapPin,
-  PanelRight,
   Plus,
-  Save,
   Search,
-  Tag,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  COLLECTION_LOCATION_FIELDS,
   formatCollectionLocation,
   isMissingCollectionLocation,
 } from "@/lib/collection/location";
 import type { CollectionRecord } from "@/lib/collection/record";
 import { cn } from "@/lib/utils";
+import {
+  SELECTED_RECORD_CHANGED_EVENT,
+  selectedRecordFromCollection,
+  type SelectedRecord,
+} from "@/lib/workspace/selected-record";
 
 type CollectionPayload = {
   records?: unknown;
@@ -141,6 +141,16 @@ function writeCollectionCache(records: CollectionRecord[]) {
   }
 }
 
+function readCollectionCache() {
+  try {
+    return normalizeCollectionRecords(
+      JSON.parse(window.localStorage.getItem(COLLECTION_CACHE_KEY) ?? "[]"),
+    );
+  } catch {
+    return [];
+  }
+}
+
 function formatRecordYear(record: CollectionRecord) {
   return record.year ? String(record.year) : "Year unknown";
 }
@@ -162,6 +172,26 @@ function recordSearchText(record: CollectionRecord) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function applySelectedRecordToCollectionRecord(
+  record: CollectionRecord,
+  selected: SelectedRecord,
+): CollectionRecord {
+  if (selected.collectionId !== record.id) {
+    return record;
+  }
+
+  return {
+    ...record,
+    status: selected.status === "wanted" ? "wanted" : "owned",
+    tags: selected.tags,
+    notes: selected.notes,
+    room: selected.room,
+    unit: selected.unit,
+    shelf: selected.shelf,
+    slot: selected.slot,
+  };
 }
 
 function formatImportProgress(progress: DiscogsImportProgress | null) {
@@ -311,7 +341,7 @@ function CollectionList({
   onSelectRecord,
 }: {
   records: CollectionRecord[];
-  selectedRecord: CollectionRecord | null;
+  selectedRecord: SelectedRecord | null;
   onSelectRecord: (record: CollectionRecord) => void;
 }) {
   return (
@@ -319,7 +349,7 @@ function CollectionList({
       {records.length > 0 ? (
         <div className="divide-y divide-[#FFF4E8]/8">
           {records.map((record) => {
-              const isSelected = selectedRecord?.id === record.id;
+              const isSelected = selectedRecord?.collectionId === record.id;
               const shelfLocation = formatCollectionLocation(record);
 
               return (
@@ -369,23 +399,44 @@ function EmptyCollection({
   isSeeding,
   hasRecords,
   onResetFilters,
+  importProgress,
+  isUsingCache,
 }: {
   onSeedFromWishlist: () => void;
   isSeeding: boolean;
   hasRecords: boolean;
   onResetFilters: () => void;
+  importProgress: DiscogsImportProgress | null;
+  isUsingCache: boolean;
 }) {
+  const emptyTitle = hasRecords
+    ? "No records found"
+    : isUsingCache
+      ? "Cached collection is empty"
+      : importProgress?.status === "failed"
+        ? "Import failed before records loaded"
+        : importProgress
+          ? "No collection records from latest import"
+          : "Not imported yet";
+  const emptyBody = hasRecords
+    ? "Adjust search, tabs, or filters to find a record."
+    : isUsingCache
+      ? "WAXLIST is showing browser-cached data because the live collection could not be loaded."
+      : importProgress?.status === "failed"
+        ? "Resume the Discogs import to continue loading owned releases."
+        : importProgress
+          ? "The latest Discogs import did not add collection records. Review the import status above."
+          : "Import your Discogs collection or seed wanted items from saved wishlist records.";
+
   return (
     <div className="grid min-h-[34rem] place-items-center text-center">
       <div>
         <Archive className="mx-auto size-8 text-[#FFF4E8]/26" aria-hidden="true" />
         <p className="mt-5 text-sm font-medium text-[#FFF4E8]/68">
-          {hasRecords ? "No records found" : "No collection records yet"}
+          {emptyTitle}
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/42">
-          {hasRecords
-            ? "Adjust search, tabs, or filters to find a record."
-            : "Seed wanted items from saved wishlist records before full Discogs collection import."}
+          {emptyBody}
       </p>
         <div className="mt-5 flex justify-center gap-2">
           {hasRecords ? (
@@ -417,230 +468,17 @@ function EmptyCollection({
   );
 }
 
-function CollectionInspector({
-  record,
-  onRecordUpdated,
+export function CollectionWorkspaceFrame({
+  initialQuery = "",
+  selectedRecord,
+  onSelectRecord,
 }: {
-  record: CollectionRecord | null;
-  onRecordUpdated: (record: CollectionRecord) => void;
+  initialQuery?: string;
+  selectedRecord: SelectedRecord | null;
+  onSelectRecord: (record: SelectedRecord | null) => void;
 }) {
-  return (
-    <aside
-      className="flex min-h-[24rem] flex-col rounded-2xl border border-[#FFF4E8]/10 bg-[#101014] p-4 shadow-2xl shadow-black/20"
-      aria-labelledby="record-inspector-heading"
-    >
-      <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-        <PanelRight className="size-4" aria-hidden="true" />
-        <p className="text-xs uppercase tracking-[0.24em]">Inspector</p>
-      </div>
-
-      {record ? (
-        <CollectionInspectorForm
-          key={record.id}
-          record={record}
-          onRecordUpdated={onRecordUpdated}
-        />
-      ) : (
-        <div className="mt-8 flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 px-5 text-center">
-          <Disc3 className="size-9 text-[#FFF4E8]/38" aria-hidden="true" />
-          <h2
-            id="record-inspector-heading"
-            className="mt-4 text-base font-semibold text-[#FFF4E8]"
-          >
-            No record selected
-          </h2>
-          <p className="mt-2 max-w-xs text-sm leading-6 text-[#FFF4E8]/58">
-            Select a collection record to edit status, tags, notes, and shelf
-            location.
-          </p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
-function CollectionInspectorForm({
-  record,
-  onRecordUpdated,
-}: {
-  record: CollectionRecord;
-  onRecordUpdated: (record: CollectionRecord) => void;
-}) {
-  const [status, setStatus] = useState<CollectionRecord["status"]>(
-    record.status,
-  );
-  const [tags, setTags] = useState(record.tags.join(", "));
-  const [notes, setNotes] = useState(record.notes ?? "");
-  const [room, setRoom] = useState(record.room ?? "");
-  const [unit, setUnit] = useState(record.unit ?? "");
-  const [shelf, setShelf] = useState(record.shelf ?? "");
-  const [slot, setSlot] = useState(record.slot ?? "");
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const locationValues = { room, unit, shelf, slot };
-  const locationSetters = { room: setRoom, unit: setUnit, shelf: setShelf, slot: setSlot };
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    setIsSaving(true);
-    setMessage(null);
-
-    try {
-      const response = await fetch(`/api/collection/${record.id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          status,
-          tags: tags
-            .split(",")
-            .map((tag) => tag.trim())
-            .filter(Boolean),
-          notes,
-          room,
-          unit,
-          shelf,
-          slot,
-        }),
-      });
-      const payload = await readCollectionResponse(response);
-      const updatedRecord = isCollectionRecord(
-        (payload as { record?: unknown }).record,
-      )
-        ? ((payload as { record: CollectionRecord }).record)
-        : null;
-
-      if (!updatedRecord) {
-        throw new Error("Collection update returned an invalid record.");
-      }
-
-      onRecordUpdated(updatedRecord);
-      setMessage("Record updated.");
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Record could not be updated.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="mt-5 flex flex-1 flex-col">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
-              Discogs #{record.discogsReleaseId}
-            </p>
-            <h2
-              id="record-inspector-heading"
-              className="mt-2 text-lg font-semibold text-[#FFF4E8]"
-            >
-              {record.title}
-            </h2>
-            <p className="mt-1 text-sm text-[#FFF4E8]/62">{record.artist}</p>
-          </div>
-
-          <div className="mt-5 grid gap-3">
-            <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62">
-              Status
-              <select
-                value={status}
-                onChange={(event) =>
-                  setStatus(event.target.value as CollectionRecord["status"])
-                }
-                className="h-10 rounded-lg border border-[#FFF4E8]/14 bg-[#120a1d] px-3 text-sm text-[#FFF4E8] outline-none focus:border-[#FFF4E8]/30"
-              >
-                <option value="owned">Owned</option>
-                <option value="wanted">Wanted</option>
-              </select>
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              {COLLECTION_LOCATION_FIELDS.map(({ key, label, placeholder }) => (
-                <label
-                  key={label}
-                  className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62"
-                >
-                  {label}
-                  <Input
-                    value={locationValues[key]}
-                    onChange={(event) => locationSetters[key](event.target.value)}
-                    placeholder={placeholder}
-                    className="h-10 rounded-lg border-[#FFF4E8]/14 bg-[#FFF4E8]/8 text-sm text-[#FFF4E8] placeholder:text-[#FFF4E8]/36 focus-visible:border-[#FFF4E8]/30 focus-visible:ring-[#FFF4E8]/12"
-                  />
-                </label>
-              ))}
-            </div>
-
-            <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62">
-              Tags
-              <Input
-                value={tags}
-                onChange={(event) => setTags(event.target.value)}
-                placeholder="jazz, first press, shop-check"
-                className="h-10 rounded-lg border-[#FFF4E8]/14 bg-[#FFF4E8]/8 text-sm text-[#FFF4E8] placeholder:text-[#FFF4E8]/36 focus-visible:border-[#FFF4E8]/30 focus-visible:ring-[#FFF4E8]/12"
-              />
-            </label>
-
-            <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/62">
-              Notes
-              <textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                rows={4}
-                className="resize-none rounded-lg border border-[#FFF4E8]/14 bg-[#FFF4E8]/8 px-3 py-2 text-sm text-[#FFF4E8] outline-none placeholder:text-[#FFF4E8]/36 focus:border-[#FFF4E8]/30"
-              />
-            </label>
-          </div>
-
-          <div className="mt-5 grid gap-2 text-xs text-[#FFF4E8]/54">
-            <p className="flex items-center gap-2">
-              <Disc3 className="size-3.5" aria-hidden="true" />
-              {record.format.length ? record.format.join(", ") : "Format unknown"}
-            </p>
-            <p className="flex items-center gap-2">
-              <Tag className="size-3.5" aria-hidden="true" />
-              {record.label ?? "Label unknown"}
-            </p>
-            <p className="flex items-center gap-2">
-              {record.status === "owned" ? (
-                <CheckCircle2 className="size-3.5" aria-hidden="true" />
-              ) : (
-                <Heart className="size-3.5" aria-hidden="true" />
-              )}
-              {record.priceHintLabel ?? "Price hint unavailable"}
-            </p>
-          </div>
-
-          <div className="mt-auto pt-5">
-            {message ? (
-              <p className="mb-3 text-xs text-[#FFF4E8]/58">{message}</p>
-            ) : null}
-            <Button
-              type="submit"
-              disabled={isSaving}
-              className="w-full rounded-full bg-[#FFF4E8] text-[#08030f] hover:bg-[#f6dfc9]"
-            >
-              {isSaving ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <Save className="size-4" aria-hidden="true" />
-              )}
-              Save record
-            </Button>
-          </div>
-        </form>
-  );
-}
-
-export function CollectionWorkspaceFrame() {
   const [records, setRecords] = useState<CollectionRecord[]>([]);
-  const [selectedRecord, setSelectedRecord] = useState<CollectionRecord | null>(
-    null,
-  );
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<CollectionTab>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSeeding, setIsSeeding] = useState(false);
@@ -648,6 +486,7 @@ export function CollectionWorkspaceFrame() {
   const [importProgress, setImportProgress] =
     useState<DiscogsImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isUsingCache, setIsUsingCache] = useState(false);
   const ownedCount = records.filter((record) => record.status === "owned").length;
   const wantedCount = records.filter(
     (record) => record.status === "wanted",
@@ -694,7 +533,8 @@ export function CollectionWorkspaceFrame() {
       const nextRecords = normalizeCollectionRecords(payload?.records);
 
       setRecords(nextRecords);
-      setSelectedRecord(null);
+      onSelectRecord(null);
+      setIsUsingCache(false);
       writeCollectionCache(nextRecords);
     } catch (error) {
       setError(
@@ -734,7 +574,8 @@ export function CollectionWorkspaceFrame() {
       }
 
       setRecords(nextRecords);
-      setSelectedRecord(null);
+      onSelectRecord(null);
+      setIsUsingCache(false);
       writeCollectionCache(nextRecords);
     } catch (error) {
       setError(
@@ -745,19 +586,6 @@ export function CollectionWorkspaceFrame() {
     } finally {
       setIsImporting(false);
     }
-  }
-
-  function handleRecordUpdated(updatedRecord: CollectionRecord) {
-    setRecords((currentRecords) => {
-      const nextRecords = currentRecords.map((record) =>
-        record.id === updatedRecord.id ? updatedRecord : record,
-      );
-
-      writeCollectionCache(nextRecords);
-
-      return nextRecords;
-    });
-    setSelectedRecord(updatedRecord);
   }
 
   function resetFilters() {
@@ -780,7 +608,8 @@ export function CollectionWorkspaceFrame() {
         const nextRecords = normalizeCollectionRecords(payload?.records);
 
         setRecords(nextRecords);
-        setSelectedRecord(null);
+        onSelectRecord(null);
+        setIsUsingCache(false);
         writeCollectionCache(nextRecords);
       })
       .catch((error) => {
@@ -788,11 +617,20 @@ export function CollectionWorkspaceFrame() {
           return;
         }
 
-        setError(
-          error instanceof Error
-            ? error.message
-            : "Collection records could not be loaded.",
-        );
+        const cachedRecords = readCollectionCache();
+
+        if (cachedRecords.length > 0) {
+          setRecords(cachedRecords);
+          onSelectRecord(null);
+          setIsUsingCache(true);
+          setError("Live collection unavailable. Using cached collection data.");
+        } else {
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Collection records could not be loaded.",
+          );
+        }
       })
       .finally(() => {
         if (isActive) {
@@ -802,6 +640,38 @@ export function CollectionWorkspaceFrame() {
 
     return () => {
       isActive = false;
+    };
+  }, [onSelectRecord]);
+
+  useEffect(() => {
+    function handleSelectedRecordChange(event: Event) {
+      const selected = (event as CustomEvent<SelectedRecord | null>).detail;
+
+      if (!selected?.collectionId) {
+        return;
+      }
+
+      setRecords((currentRecords) => {
+        const nextRecords = currentRecords.map((record) =>
+          applySelectedRecordToCollectionRecord(record, selected),
+        );
+
+        writeCollectionCache(nextRecords);
+        return nextRecords;
+      });
+      setIsUsingCache(false);
+    }
+
+    window.addEventListener(
+      SELECTED_RECORD_CHANGED_EVENT,
+      handleSelectedRecordChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SELECTED_RECORD_CHANGED_EVENT,
+        handleSelectedRecordChange,
+      );
     };
   }, []);
 
@@ -842,20 +712,32 @@ export function CollectionWorkspaceFrame() {
           >
             Collection
           </h1>
-          <Button
-            type="button"
-            onClick={handleSeedFromWishlist}
-            disabled={isSeeding}
-            variant="outline"
-            className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8] disabled:opacity-45"
-          >
-            {isSeeding ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Plus className="size-4" aria-hidden="true" />
-            )}
-            Add wishlist
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8]"
+            >
+              <Link href="/app?view=insights">
+                <BarChart3 className="size-4" aria-hidden="true" />
+                Health audit
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSeedFromWishlist}
+              disabled={isSeeding}
+              variant="outline"
+              className="rounded-full border-[#FFF4E8]/12 bg-transparent px-4 text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8] disabled:opacity-45"
+            >
+              {isSeeding ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Plus className="size-4" aria-hidden="true" />
+              )}
+              Add wishlist
+            </Button>
+          </div>
         </div>
 
         <DiscogsImportPanel
@@ -962,7 +844,9 @@ export function CollectionWorkspaceFrame() {
             <CollectionList
               records={filteredRecords}
               selectedRecord={selectedRecord}
-              onSelectRecord={setSelectedRecord}
+              onSelectRecord={(record) =>
+                onSelectRecord(selectedRecordFromCollection(record))
+              }
             />
           ) : (
             <EmptyCollection
@@ -970,20 +854,13 @@ export function CollectionWorkspaceFrame() {
               isSeeding={isSeeding}
               hasRecords={records.length > 0}
               onResetFilters={resetFilters}
+              importProgress={importProgress}
+              isUsingCache={isUsingCache}
             />
           )}
         </div>
       </section>
 
-      {selectedRecord ? (
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="hidden xl:block" />
-          <CollectionInspector
-            record={selectedRecord}
-            onRecordUpdated={handleRecordUpdated}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }

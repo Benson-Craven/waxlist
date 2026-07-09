@@ -21,6 +21,8 @@ export type CollectionItemInput = {
   catalogNumber: string | null;
   barcode: string | null;
   imageUrl: string | null;
+  mediaCondition: string | null;
+  sleeveCondition: string | null;
   status: CollectionItemStatus;
   tags: string[];
   notes: string | null;
@@ -52,6 +54,18 @@ export type CollectionRecord = Omit<
 export type CollectionItemPatch = Partial<
   Pick<
     CollectionItemInput,
+    | "discogsReleaseId"
+    | "discogsMasterId"
+    | "artist"
+    | "title"
+    | "format"
+    | "year"
+    | "label"
+    | "catalogNumber"
+    | "barcode"
+    | "imageUrl"
+    | "mediaCondition"
+    | "sleeveCondition"
     | "status"
     | "tags"
     | "notes"
@@ -171,6 +185,8 @@ export function normalizeCollectionItemInput(
     catalogNumber: nullableString(record.catalogNumber),
     barcode: nullableString(record.barcode),
     imageUrl: nullableString(record.imageUrl),
+    mediaCondition: nullableString(record.mediaCondition),
+    sleeveCondition: nullableString(record.sleeveCondition),
     status: normalizedStatus(record.status),
     tags: normalizedStringList(record.tags),
     notes: nullableString(record.notes),
@@ -233,6 +249,49 @@ export function normalizeCollectionItemPatch(
 
   if (status) {
     patch.status = status;
+  }
+
+  if ("discogsReleaseId" in record) {
+    const discogsReleaseId = positiveInteger(record.discogsReleaseId);
+
+    if (discogsReleaseId) {
+      patch.discogsReleaseId = discogsReleaseId;
+    }
+  }
+
+  if ("discogsMasterId" in record) {
+    patch.discogsMasterId = positiveInteger(record.discogsMasterId);
+  }
+
+  if ("year" in record) {
+    patch.year = positiveInteger(record.year);
+  }
+
+  if ("format" in record) {
+    patch.format = normalizedStringList(record.format);
+  }
+
+  for (const key of ["artist", "title"] as const) {
+    if (key in record) {
+      const value = nullableString(record[key]);
+
+      if (value) {
+        patch[key] = value;
+      }
+    }
+  }
+
+  for (const key of [
+    "label",
+    "catalogNumber",
+    "barcode",
+    "imageUrl",
+    "mediaCondition",
+    "sleeveCondition",
+  ] as const) {
+    if (key in record) {
+      patch[key] = nullableString(record[key]);
+    }
   }
 
   if ("tags" in record) {

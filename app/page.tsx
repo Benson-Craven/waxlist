@@ -149,13 +149,11 @@ function getSpotifyRedirectOrigin() {
   }
 }
 
-function getSpotifyStatusMessage(
-  searchParams: {
-    spotify?: string | string[];
-    missing?: string | string[];
-    reason?: string | string[];
-  },
-) {
+function getSpotifyStatusMessage(searchParams: {
+  spotify?: string | string[];
+  missing?: string | string[];
+  reason?: string | string[];
+}) {
   const spotifyStatus = getFirstSearchParam(searchParams.spotify);
   const missing = getFirstSearchParam(searchParams.missing);
   const reason = getFirstSearchParam(searchParams.reason);
@@ -250,9 +248,7 @@ export default async function Home({
     redirect("/app");
   }
 
-  const spotifyStatusMessage = getSpotifyStatusMessage(
-    resolvedSearchParams,
-  );
+  const spotifyStatusMessage = getSpotifyStatusMessage(resolvedSearchParams);
   const landingGradient = getLandingGradientPreset(
     resolvedSearchParams.gradient,
   );
