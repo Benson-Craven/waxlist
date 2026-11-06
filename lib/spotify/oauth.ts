@@ -19,6 +19,7 @@ const SPOTIFY_SESSION_COOKIE_VERSION = "v1";
 const SPOTIFY_SESSION_IV_BYTES = 12;
 
 export type SpotifySession = {
+  authUserId: string;
   accessToken: string;
   refreshToken?: string;
   expiresAt: number;
@@ -68,6 +69,7 @@ export function buildSpotifyAuthorizeUrl(input: {
   clientId: string;
   redirectUri: string;
   state: string;
+  scopes?: readonly string[];
 }) {
   const authorizeUrl = new URL(SPOTIFY_AUTHORIZE_URL);
 
@@ -75,7 +77,10 @@ export function buildSpotifyAuthorizeUrl(input: {
   authorizeUrl.searchParams.set("response_type", "code");
   authorizeUrl.searchParams.set("redirect_uri", input.redirectUri);
   authorizeUrl.searchParams.set("state", input.state);
-  authorizeUrl.searchParams.set("scope", SPOTIFY_OAUTH_SCOPES.join(" "));
+  const scopes = input.scopes ?? SPOTIFY_OAUTH_SCOPES;
+  if (scopes.length > 0) {
+    authorizeUrl.searchParams.set("scope", scopes.join(" "));
+  }
   authorizeUrl.searchParams.set("show_dialog", "true");
 
   return authorizeUrl;
@@ -87,6 +92,7 @@ function getSessionEncryptionKey(secret: string) {
 
 export function encodeSpotifySession(
   input: {
+    authUserId: string;
     accessToken: string;
     refreshToken?: string;
     expiresIn: number;
@@ -96,6 +102,7 @@ export function encodeSpotifySession(
   secret: string,
 ) {
   const payload = {
+    authUserId: input.authUserId,
     accessToken: input.accessToken,
     refreshToken: input.refreshToken,
     expiresAt: Date.now() + input.expiresIn * 1000,
@@ -156,6 +163,7 @@ export function decodeSpotifySession(
     ) as Partial<SpotifySession>;
 
     if (
+      typeof payload.authUserId !== "string" ||
       typeof payload.accessToken !== "string" ||
       typeof payload.expiresAt !== "number" ||
       typeof payload.tokenType !== "string"
@@ -164,6 +172,7 @@ export function decodeSpotifySession(
     }
 
     return {
+      authUserId: payload.authUserId,
       accessToken: payload.accessToken,
       refreshToken:
         typeof payload.refreshToken === "string"
@@ -176,6 +185,33 @@ export function decodeSpotifySession(
   } catch {
     return;
   }
+}
+
+export function encodeSpotifyCredential(value: string, secret: string) {
+  const iv = randomBytes(SPOTIFY_SESSION_IV_BYTES);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    getSessionEncryptionKey(secret),
+    iv,
+  );
+  const ciphertext = Buffer.concat([
+    cipher.update(value, "utf8"),
+    cipher.final(),
+  ]);
+
+  return [
+    SPOTIFY_SESSION_COOKIE_VERSION,
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    ciphertext.toString("base64url"),
+  ].join(".");
+}
+
+export function isSpotifySessionForAuthUser(
+  session: SpotifySession,
+  authUserId: string,
+) {
+  return session.authUserId === authUserId;
 }
 
 export function getSpotifyCookieNames() {

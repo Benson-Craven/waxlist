@@ -10,24 +10,29 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowLeft,
   Bookmark,
   BookmarkCheck,
   Check,
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
+  CircleCheck,
   CirclePlay,
   Disc3,
   ExternalLink,
   Loader2,
   Music2,
   Search,
-  SlidersHorizontal,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { LabelBadge } from "@/components/ui/label-badge";
 import { Button } from "@/components/ui/button";
+import { Collapse } from "@/components/ui/collapse";
 import { Input } from "@/components/ui/input";
 import {
   Status,
@@ -35,6 +40,7 @@ import {
   StatusLabel,
 } from "@/components/ui/status";
 import { SPOTIFY_AUTH_START_PATH } from "@/lib/constants";
+import type { SpotifyConnectionNotice } from "@/lib/spotify/connection-notice";
 import { cn } from "@/lib/utils";
 import type {
   SpotifyPlaylistImportSummary,
@@ -52,8 +58,18 @@ import type {
   RankedDiscogsMatch,
 } from "@/lib/matching/match-discogs-release";
 import {
-  createPriceBreakdownFromMarketplaceStats,
-  normalizeWishlistBuyingControls,
+  addMatchCorrection,
+  discogsSearchHref,
+  getMatchCorrectionsSnapshot,
+  getServerMatchCorrectionsSnapshot,
+  isMatchCorrected,
+  parseMatchCorrectionsSnapshot,
+  removeMatchCorrection,
+  subscribeToMatchCorrections,
+  type MatchCorrection,
+} from "@/lib/matching/match-corrections";
+import type { CollectionGapState } from "@/lib/listening/types";
+import {
   normalizeWishlistRecord,
   type WishlistRecord,
 } from "@/lib/wishlist/record";
@@ -83,6 +99,15 @@ type SpotifyAlbumPayload = {
   albums: SpotifySavedAlbum[];
   paging: SpotifyPlaylistPayload["paging"];
 };
+type SpotifyDiscogsMatchResult = Omit<DiscogsMatchResult, "bestMatch"> & {
+  state: CollectionGapState;
+  bestMatch:
+    | (RankedDiscogsMatch & {
+        masterId: number | null;
+        markToken: string | null;
+      })
+    | null;
+};
 type DiscogsMatchPayload = {
   matchRun: {
     searchedUnits: number;
@@ -91,7 +116,7 @@ type DiscogsMatchPayload = {
     requestDelayMs: number;
     stoppedForRateLimit: boolean;
     rateLimit: DiscogsRateLimit;
-    results: DiscogsMatchResult[];
+    results: SpotifyDiscogsMatchResult[];
     failures: Array<{
       searchUnit: DiscogsMatchResult["searchUnit"];
       error: StructuredDiscogsError;
@@ -99,8 +124,8 @@ type DiscogsMatchPayload = {
   };
 };
 type VinylCrateRecord = {
-  result: DiscogsMatchResult;
-  match: NonNullable<DiscogsMatchResult["bestMatch"]>;
+  result: SpotifyDiscogsMatchResult;
+  match: NonNullable<SpotifyDiscogsMatchResult["bestMatch"]>;
 };
 type DiscogsReviewItem = {
   result: DiscogsMatchResult;
@@ -110,13 +135,7 @@ type DiscogsReviewItem = {
 };
 type WishlistPayload = { records: WishlistRecord[] };
 type WishlistSavePayload = { record: WishlistRecord };
-type CrateSortKey =
-  | "recommendation"
-  | "confidence"
-  | "availability"
-  | "price"
-  | "artist"
-  | "album";
+type CrateSortKey = "confidence" | "artist" | "album";
 
 const PLAYLIST_PAGE_LIMIT = 12;
 const ALBUM_PAGE_LIMIT = 12;
@@ -124,6 +143,15 @@ const WISHLIST_STORAGE_KEY = "waxlist:wishlist:v1";
 const WISHLIST_CHANGED_EVENT = "waxlist:wishlist-changed";
 const ALBUM_SEARCH_STORAGE_KEY = "waxlist:saved-album-search:v1";
 const IMPORT_DIALOG_ANIMATION_MS = 220;
+const IMPORT_ALBUM_PREVIEW_LIMIT = 12;
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
 
 class EndpointRequestError extends Error {
   code: string | null;
@@ -159,6 +187,9 @@ function useHasMounted() {
 type LoadState =
   | {
       status: "loading";
+    }
+  | {
+      status: "disconnected";
     }
   | {
       status: "ready";
@@ -202,11 +233,19 @@ async function fetchJson<T>(path: string, init?: RequestInit) {
   return payload;
 }
 
-function isSpotifyReconnectMessage(message: string) {
-  return (
+function getSpotifyConnectionAction(message: string) {
+  if (message.includes("Connect Spotify before")) {
+    return "Connect Spotify";
+  }
+
+  if (
     message.includes("Connect Spotify again") ||
     message.includes("Reconnect Spotify")
-  );
+  ) {
+    return "Reconnect Spotify";
+  }
+
+  return null;
 }
 
 function getDiscogsConfigurationMessage(error: EndpointRequestError) {
@@ -269,6 +308,43 @@ function getDiscogsReviewItems(payload: DiscogsMatchPayload) {
     });
 }
 
+function getCorrectedMatchReviewItems(
+  payload: DiscogsMatchPayload,
+  corrections: MatchCorrection[],
+): DiscogsReviewItem[] {
+  return payload.matchRun.results.flatMap((result) => {
+    const bestMatch = result.bestMatch;
+
+    if (
+      !bestMatch ||
+      !isMatchCorrected(corrections, result.searchUnit.id, bestMatch.id)
+    ) {
+      return [];
+    }
+
+    const nextMatch =
+      result.matches.find(
+        (candidate) =>
+          !isMatchCorrected(corrections, result.searchUnit.id, candidate.id),
+      ) ?? null;
+
+    return [
+      {
+        result,
+        match: nextMatch,
+        status: nextMatch
+          ? nextMatch.confidence >= 60
+            ? ("possible" as const)
+            : ("weak" as const)
+          : ("none" as const),
+        reason: nextMatch
+          ? "The top match was marked as a wrong match. Review the next candidate, or search Discogs directly."
+          : "Every candidate for this album has been marked as a wrong match. Search Discogs directly for the release you want.",
+      },
+    ];
+  });
+}
+
 function formatRetryDelay(seconds: number) {
   if (seconds < 60) {
     return `${seconds.toLocaleString()} seconds`;
@@ -297,47 +373,6 @@ function getRateLimitLabel(rateLimit: DiscogsRateLimit) {
   ].filter((part): part is string => Boolean(part));
 
   return `Discogs rate limit: ${parts.join(" / ")}.`;
-}
-
-function getDiscogsArtistFromTitle(title: string, fallback: string) {
-  const [artistPart] = title.split(/\s+-\s+/, 1);
-
-  return artistPart?.trim() || fallback;
-}
-
-function createWishlistRecord(record: VinylCrateRecord): WishlistRecord {
-  return {
-    id: getCrateRecordId(record),
-    savedAt: new Date().toISOString(),
-    spotifyAlbum: record.result.searchUnit.album,
-    spotifyArtist: record.result.searchUnit.artist,
-    spotifyAlbumId: record.result.searchUnit.spotifyAlbumId,
-    spotifyAlbumUrl: record.result.searchUnit.spotifyAlbumUrl,
-    discogsReleaseId: record.match.id,
-    discogsTitle: record.match.title,
-    discogsArtist: getDiscogsArtistFromTitle(
-      record.match.title,
-      record.result.searchUnit.artist,
-    ),
-    discogsUri: record.match.uri,
-    thumb: record.match.thumb,
-    format: record.match.format,
-    year: record.match.year,
-    country: record.match.country,
-    recommendationScore: record.match.recommendationScore,
-    confidence: record.match.confidence,
-    availabilityLabel: record.match.availability.label,
-    priceLabel: record.match.priceHint.label,
-    sourceTrackCount: record.result.searchUnit.sourceTrackCount,
-    buyingControls: normalizeWishlistBuyingControls(null),
-    priceBreakdown: createPriceBreakdownFromMarketplaceStats({
-      value: record.match.priceHint.value,
-      currency: record.match.priceHint.currency,
-      label: record.match.priceHint.label,
-      checkedAt: record.match.priceHint.checkedAt,
-      freshForSeconds: record.match.priceHint.freshForSeconds,
-    }),
-  };
 }
 
 function readWishlistRecords() {
@@ -436,10 +471,6 @@ function readBrowserStorageValue(key: string) {
   return window.localStorage.getItem(key) ?? "";
 }
 
-function loadWishlistIds() {
-  return new Set(readWishlistRecords().map((record) => record.id));
-}
-
 function useWishlistRecords() {
   const [records, setRecords] = useState<WishlistRecord[]>(() =>
     readWishlistRecords(),
@@ -491,24 +522,6 @@ function useWishlistRecords() {
 
 function sortCrateRecords(records: VinylCrateRecord[], sortKey: CrateSortKey) {
   return [...records].sort((first, second) => {
-    if (sortKey === "confidence") {
-      return second.match.confidence - first.match.confidence;
-    }
-
-    if (sortKey === "availability") {
-      return (
-        (second.match.availability.numForSale ?? -1) -
-        (first.match.availability.numForSale ?? -1)
-      );
-    }
-
-    if (sortKey === "price") {
-      return (
-        (first.match.priceHint.value ?? Number.POSITIVE_INFINITY) -
-        (second.match.priceHint.value ?? Number.POSITIVE_INFINITY)
-      );
-    }
-
     if (sortKey === "artist") {
       return first.result.searchUnit.artist.localeCompare(
         second.result.searchUnit.artist,
@@ -521,7 +534,7 @@ function sortCrateRecords(records: VinylCrateRecord[], sortKey: CrateSortKey) {
       );
     }
 
-    return second.match.recommendationScore - first.match.recommendationScore;
+    return second.match.confidence - first.match.confidence;
   });
 }
 
@@ -593,8 +606,35 @@ function LoadingPanel({ showProfilePanel }: { showProfilePanel: boolean }) {
   );
 }
 
+function DisconnectedPanel({ showConnect }: { showConnect: boolean }) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/30 p-8 text-center shadow-2xl backdrop-blur-xl">
+      <div className="mb-5 flex justify-center">
+        <span className="grid size-12 place-items-center rounded-full border border-[#1DB954]/24 bg-[#1DB954]/12 text-[#1DB954]">
+          <Disc3 className="size-6" aria-hidden="true" />
+        </span>
+      </div>
+      <p className="text-sm font-medium text-[#FFF4E8]">
+        Connect Spotify to build a crate
+      </p>
+      <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-[#FFF4E8]/70">
+        WAXLIST reads your playlists and saved albums to find releases worth
+        chasing. Nothing is fetched until you connect.
+      </p>
+      {showConnect ? (
+        <Button
+          asChild
+          className="mt-5 h-10 rounded-full bg-[#1DB954] px-5 text-sm font-semibold text-[#041008] hover:bg-[#22d162]"
+        >
+          <a href={SPOTIFY_AUTH_START_PATH}>Connect Spotify</a>
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function ErrorPanel({ message }: { message: string }) {
-  const shouldShowReconnect = isSpotifyReconnectMessage(message);
+  const connectionAction = getSpotifyConnectionAction(message);
 
   return (
     <div className="rounded-3xl border border-white/10 bg-black/30 p-8 text-center shadow-2xl backdrop-blur-xl">
@@ -615,12 +655,12 @@ function ErrorPanel({ message }: { message: string }) {
       <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-[#FFF4E8]/70">
         {message}
       </p>
-      {shouldShowReconnect ? (
+      {connectionAction ? (
         <Button
           asChild
           className="mt-5 h-10 rounded-full bg-[#1DB954] px-5 text-sm font-semibold text-[#041008] hover:bg-[#22d162]"
         >
-          <a href={SPOTIFY_AUTH_START_PATH}>Reconnect Spotify</a>
+          <a href={SPOTIFY_AUTH_START_PATH}>{connectionAction}</a>
         </Button>
       ) : null}
     </div>
@@ -637,7 +677,7 @@ function WishlistPanel() {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <span
-            className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#D34278]/18 text-[#FFF4E8] shadow-[0_0_32px_rgba(211,66,120,0.16)] ring-1 ring-white/10"
+            className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#D34278]/18 text-[#FFF4E8] shadow-[0_0_32px_rgba(211,66,120,0.16)]"
             aria-hidden="true"
           >
             <BookmarkCheck className="size-5" strokeWidth={1.8} />
@@ -679,10 +719,10 @@ function WishlistPanel() {
 
                 <div className="min-w-0 flex-1">
                   <h3 className="truncate text-sm font-semibold text-[#FFF4E8]">
-                    {record.spotifyAlbum}
+                    {record.sourceAlbum}
                   </h3>
                   <p className="mt-1 truncate text-xs text-[#FFF4E8]/52">
-                    {record.spotifyArtist}
+                    {record.sourceArtist}
                   </p>
                   <p className="mt-2 text-xs leading-5 text-[#FFF4E8]/42">
                     {record.recommendationScore}/100 · {record.confidence}/100
@@ -704,14 +744,14 @@ function WishlistPanel() {
                     </a>
                   </Button>
                 ) : null}
-                {record.spotifyAlbumUrl ? (
+                {record.sourceAlbumUrl ? (
                   <Button
                     asChild
                     variant="outline"
                     className="h-8 flex-1 rounded-full border-white/15 bg-white/8 px-3 text-xs text-[#FFF4E8] hover:bg-white/15"
                   >
                     <a
-                      href={record.spotifyAlbumUrl}
+                      href={record.sourceAlbumUrl}
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -725,7 +765,7 @@ function WishlistPanel() {
                   variant="outline"
                   onClick={() => removeRecord(record.id)}
                   className="h-8 rounded-full border-white/15 bg-white/8 px-3 text-xs text-[#FFF4E8] hover:bg-white/15"
-                  aria-label={`Remove ${record.spotifyAlbum} from wishlist`}
+                  aria-label={`Remove ${record.sourceAlbum} from wishlist`}
                 >
                   <X className="size-3.5" />
                   Remove
@@ -736,8 +776,7 @@ function WishlistPanel() {
         </div>
       ) : (
         <p className="mt-4 text-sm leading-6 text-[#FFF4E8]/55">
-          Saved Discogs matches will appear here after you run a match and tap
-          Save.
+          Saved matches show up here.
         </p>
       )}
 
@@ -758,13 +797,13 @@ function ProfilePanel({ profile }: { profile: SpotifyProfile }) {
       <div className="flex items-center gap-4">
         {profile.imageUrl ? (
           <div
-            className="size-16 shrink-0 rounded-2xl bg-cover bg-center ring-1 ring-white/15"
+            className="size-16 shrink-0 rounded-2xl bg-cover bg-center"
             style={{ backgroundImage: `url(${profile.imageUrl})` }}
             aria-label={`${profileName} Spotify profile image`}
             role="img"
           />
         ) : (
-          <div className="grid size-16 shrink-0 place-items-center rounded-2xl bg-[#1DB954]/20 text-[#1DB954] ring-1 ring-white/15">
+          <div className="grid size-16 shrink-0 place-items-center rounded-2xl bg-[#1DB954]/20 text-[#1DB954]">
             <Music2 className="size-7" />
           </div>
         )}
@@ -957,7 +996,7 @@ function SelectedPlaylistBanner({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#05030A]/88 px-4 py-3 shadow-[0_-24px_60px_rgba(0,0,0,0.38)] backdrop-blur-2xl transform-gpu transition-[transform,opacity,filter] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity,filter] motion-reduce:transition-none sm:px-6",
+        "wax-flat fixed inset-x-0 bottom-0 z-50 bg-[#05030A]/88 px-4 py-3 shadow-[0_-24px_60px_rgba(0,0,0,0.38)] backdrop-blur-2xl transform-gpu transition-[transform,opacity,filter] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity,filter] motion-reduce:transition-none sm:px-6",
         isVisible
           ? "pointer-events-auto translate-y-0 scale-100 opacity-100 blur-0"
           : "pointer-events-none translate-y-6 scale-[0.985] opacity-0 blur-[1.5px]",
@@ -969,19 +1008,19 @@ function SelectedPlaylistBanner({
           <div className="flex min-w-0 items-center gap-3">
             {playlist.imageUrl ? (
               <div
-                className="size-14 shrink-0 rounded-xl bg-cover bg-center ring-1 ring-white/15"
+                className="size-14 shrink-0 rounded-xl bg-cover bg-center"
                 style={{ backgroundImage: `url(${playlist.imageUrl})` }}
                 aria-label={`${playlist.name} playlist cover`}
                 role="img"
               />
             ) : (
-              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-[#160A24] text-[#FFF4E8]/55 ring-1 ring-white/15">
+              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-[#160A24] text-[#FFF4E8]/55">
                 <Disc3 className="size-6" />
               </div>
             )}
 
             <div className="min-w-0">
-              <p className="text-[0.68rem] font-medium uppercase tracking-[0.28em] text-[#1DB954]">
+              <p className="text-[0.68rem] font-medium uppercase tracking-[0.28em] text-[#FFF4E8]/42">
                 Selected playlist
               </p>
               <div className="mt-1 flex min-w-0 flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
@@ -1037,7 +1076,7 @@ function SelectedAlbumBanner({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#05030A]/88 px-4 py-3 shadow-[0_-24px_60px_rgba(0,0,0,0.38)] backdrop-blur-2xl transform-gpu transition-[transform,opacity,filter] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity,filter] motion-reduce:transition-none sm:px-6",
+        "wax-flat fixed inset-x-0 bottom-0 z-50 bg-[#05030A]/88 px-4 py-3 shadow-[0_-24px_60px_rgba(0,0,0,0.38)] backdrop-blur-2xl transform-gpu transition-[transform,opacity,filter] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] will-change-[transform,opacity,filter] motion-reduce:transition-none sm:px-6",
         isVisible
           ? "pointer-events-auto translate-y-0 scale-100 opacity-100 blur-0"
           : "pointer-events-none translate-y-6 scale-[0.985] opacity-0 blur-[1.5px]",
@@ -1049,19 +1088,19 @@ function SelectedAlbumBanner({
           <div className="flex min-w-0 items-center gap-3">
             {album.imageUrl ? (
               <div
-                className="size-14 shrink-0 rounded-xl bg-cover bg-center ring-1 ring-white/15"
+                className="size-14 shrink-0 rounded-xl bg-cover bg-center"
                 style={{ backgroundImage: `url(${album.imageUrl})` }}
                 aria-label={`${album.name} album cover`}
                 role="img"
               />
             ) : (
-              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-[#160A24] text-[#FFF4E8]/55 ring-1 ring-white/15">
+              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-[#160A24] text-[#FFF4E8]/55">
                 <Disc3 className="size-6" />
               </div>
             )}
 
             <div className="min-w-0">
-              <p className="text-[0.68rem] font-medium uppercase tracking-[0.28em] text-[#1DB954]">
+              <p className="text-[0.68rem] font-medium uppercase tracking-[0.28em] text-[#FFF4E8]/42">
                 Selected album
               </p>
               <div className="mt-1 flex min-w-0 flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
@@ -1098,128 +1137,149 @@ function SelectedAlbumBanner({
 }
 
 function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
-  const [sortKey, setSortKey] = useState<CrateSortKey>("recommendation");
-  const [availableOnly, setAvailableOnly] = useState(false);
-  const [wishlistIds, setWishlistIds] = useState<Set<string>>(() =>
-    loadWishlistIds(),
+  const [sortKey, setSortKey] = useState<CrateSortKey>("confidence");
+  const [collectionStateByRecordId, setCollectionStateByRecordId] = useState(
+    () =>
+      new Map(
+        payload.matchRun.results
+          .filter(
+            (result) =>
+              result.bestMatch &&
+              (result.state === "owned" || result.state === "wanted"),
+          )
+          .map((result) => [
+            `${result.searchUnit.id}::${result.bestMatch?.id}`,
+            result.state as "owned" | "wanted",
+          ]),
+      ),
   );
+  const [markingRecordId, setMarkingRecordId] = useState<string | null>(null);
+  const [markError, setMarkError] = useState<string | null>(null);
+  const [wrongMatchNotice, setWrongMatchNotice] =
+    useState<MatchCorrection | null>(null);
+  const correctionsSnapshot = useSyncExternalStore(
+    subscribeToMatchCorrections,
+    getMatchCorrectionsSnapshot,
+    getServerMatchCorrectionsSnapshot,
+  );
+  const corrections = useMemo(
+    () => parseMatchCorrectionsSnapshot(correctionsSnapshot),
+    [correctionsSnapshot],
+  );
+
   const crateRecords = useMemo(() => getCrateRecords(payload), [payload]);
-  const reviewItems = useMemo(() => getDiscogsReviewItems(payload), [payload]);
-  const visibleRecords = useMemo(() => {
-    const filteredRecords = availableOnly
-      ? crateRecords.filter(
-          (record) => record.match.availability.status === "available",
-        )
-      : crateRecords;
+  const reviewItems = useMemo(
+    () => [
+      ...getDiscogsReviewItems(payload),
+      ...getCorrectedMatchReviewItems(payload, corrections),
+    ],
+    [payload, corrections],
+  );
+  const openRecords = useMemo(
+    () =>
+      crateRecords.filter(
+        (record) =>
+          !isMatchCorrected(
+            corrections,
+            record.result.searchUnit.id,
+            record.match.id,
+          ),
+      ),
+    [crateRecords, corrections],
+  );
+  const visibleRecords = useMemo(
+    () => sortCrateRecords(openRecords, sortKey),
+    [openRecords, sortKey],
+  );
 
-    return sortCrateRecords(filteredRecords, sortKey);
-  }, [availableOnly, crateRecords, sortKey]);
+  function markWrongMatch(record: VinylCrateRecord) {
+    const correction: MatchCorrection = {
+      sourceKey: record.result.searchUnit.id,
+      discogsReleaseId: record.match.id,
+      sourceArtist: record.result.searchUnit.artist,
+      sourceAlbum: record.result.searchUnit.album,
+      discogsTitle: record.match.title,
+      createdAt: new Date().toISOString(),
+    };
 
-  useEffect(() => {
-    let isActive = true;
+    addMatchCorrection(correction);
+    setWrongMatchNotice(correction);
+    setMarkError(null);
+  }
 
-    function syncWishlistIds() {
-      setWishlistIds(loadWishlistIds());
+  function undoWrongMatch() {
+    if (!wrongMatchNotice) {
+      return;
     }
 
-    window.addEventListener(WISHLIST_CHANGED_EVENT, syncWishlistIds);
-    window.addEventListener("storage", syncWishlistIds);
-    syncWishlistRecordsFromApi()
-      .then((records) => {
-        if (isActive) {
-          setWishlistIds(new Set(records.map((record) => record.id)));
-        }
-      })
-      .catch(() => {
-        if (isActive) {
-          setWishlistIds(loadWishlistIds());
-        }
-      });
-
-    return () => {
-      isActive = false;
-      window.removeEventListener(WISHLIST_CHANGED_EVENT, syncWishlistIds);
-      window.removeEventListener("storage", syncWishlistIds);
-    };
-  }, []);
-
-  async function toggleWishlist(record: VinylCrateRecord) {
-    const recordId = getCrateRecordId(record);
-    const wishlistRecord = createWishlistRecord(record);
-    const currentRecords = readWishlistRecords();
-    const isSaved = currentRecords.some(
-      (currentRecord) => currentRecord.id === recordId,
+    removeMatchCorrection(
+      wrongMatchNotice.sourceKey,
+      wrongMatchNotice.discogsReleaseId,
     );
-    const nextRecords = isSaved
-      ? currentRecords.filter((currentRecord) => currentRecord.id !== recordId)
-      : [
-          wishlistRecord,
-          ...currentRecords.filter(
-            (currentRecord) => currentRecord.id !== recordId,
-          ),
-        ];
+    setWrongMatchNotice(null);
+  }
 
-    writeWishlistRecords(nextRecords);
-    setWishlistIds(new Set(nextRecords.map((nextRecord) => nextRecord.id)));
+  async function markCollectionState(
+    record: VinylCrateRecord,
+    status: "owned" | "wanted",
+  ) {
+    const recordId = getCrateRecordId(record);
+    const markToken = record.match.markToken;
+
+    if (!markToken) {
+      setMarkError(
+        "This match needs another catalogue review before collection state can change.",
+      );
+      return;
+    }
+
+    setMarkingRecordId(recordId);
+    setMarkError(null);
 
     try {
-      if (isSaved) {
-        await removeWishlistRecordFromApi(recordId);
-      } else {
-        const savedRecord = await saveWishlistRecordToApi(wishlistRecord);
-        const syncedRecords = mergeWishlistRecords([
-          savedRecord,
-          ...readWishlistRecords().filter(
-            (currentRecord) => currentRecord.id !== savedRecord.id,
-          ),
-        ]);
-
-        writeWishlistRecords(syncedRecords);
-        setWishlistIds(
-          new Set(syncedRecords.map((syncedRecord) => syncedRecord.id)),
-        );
-      }
-    } catch {
-      setWishlistIds(loadWishlistIds());
+      await fetchJson<{ state: "owned" | "wanted" }>(
+        "/api/listening/gaps/mark",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status, markToken }),
+        },
+      );
+      setCollectionStateByRecordId((current) => {
+        const next = new Map(current);
+        next.set(recordId, status);
+        return next;
+      });
+    } catch (error) {
+      setMarkError(
+        error instanceof Error
+          ? error.message
+          : "Collection state could not be updated.",
+      );
+    } finally {
+      setMarkingRecordId(null);
     }
   }
 
   return (
     <div className="mt-5">
-      <div className="grid gap-2 text-sm sm:grid-cols-4">
-        <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Searched
-          </p>
-          <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
-            {payload.matchRun.searchedUnits.toLocaleString()}
-          </p>
-        </div>
-        <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Reliable
-          </p>
-          <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
-            {crateRecords.length.toLocaleString()}
-          </p>
-        </div>
-        <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Review
-          </p>
-          <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
-            {reviewItems.length.toLocaleString()}
-          </p>
-        </div>
-        <div className="border-l border-white/15 bg-white/[0.055] px-4 py-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/38">
-            Failures
-          </p>
-          <p className="mt-2 text-lg font-semibold text-[#FFF4E8]">
-            {payload.matchRun.failures.length.toLocaleString()}
-          </p>
-        </div>
-      </div>
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl bg-white/8 sm:grid-cols-4">
+        {[
+          ["Searched", payload.matchRun.searchedUnits],
+          ["Reliable", openRecords.length],
+          ["Review", reviewItems.length],
+          ["Failures", payload.matchRun.failures.length],
+        ].map(([label, value]) => (
+          <div key={label} className="bg-[#0B0713] px-4 py-3">
+            <dt className="text-[0.68rem] uppercase tracking-[0.22em] text-[#FFF4E8]/42">
+              {label}
+            </dt>
+            <dd className="mt-1.5 text-xl font-semibold tabular-nums text-[#FFF4E8]">
+              {value.toLocaleString()}
+            </dd>
+          </div>
+        ))}
+      </dl>
 
       {payload.matchRun.skippedUnits > 0 ? (
         <p className="mt-3 text-sm text-[#FFF4E8]/52">
@@ -1229,82 +1289,92 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         </p>
       ) : null}
 
-      <div className="mt-3 space-y-2 text-sm leading-6">
-        <p className="text-[#FFF4E8]/52">
-          {getRateLimitLabel(payload.matchRun.rateLimit)} Requests were spaced by{" "}
-          {payload.matchRun.requestDelayMs.toLocaleString()}ms.
+      {payload.matchRun.stoppedForRateLimit ? (
+        <p className="mt-3 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
+          Discogs asked WAXLIST to pause, so the remaining albums were left
+          unsearched for now.
         </p>
-        {payload.matchRun.stoppedForRateLimit ? (
-          <p className="border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-[#FFF4E8]/72">
-            Discogs asked WAXLIST to pause, so the remaining albums were left
-            unsearched for now.
-          </p>
-        ) : null}
-        {payload.matchRun.failures.length > 0 ? (
-          <div className="border-l-2 border-[#D34278] bg-[#D34278]/10 px-4 py-3 text-[#FFF4E8]/72">
-            <p className="font-medium text-[#FFF4E8]">
-              Some Discogs requests need another pass.
+      ) : null}
+
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <label
+          htmlFor="crate-sort"
+          className="text-xs uppercase tracking-[0.22em] text-[#FFF4E8]/38"
+        >
+          Sort
+        </label>
+        <select
+          id="crate-sort"
+          value={sortKey}
+          onChange={(event) => setSortKey(event.target.value as CrateSortKey)}
+          className="h-10 rounded-full border border-white/15 bg-[#05030A] px-4 text-sm text-[#FFF4E8] outline-none focus:border-[#1DB954]"
+          aria-label="Sort vinyl crate"
+        >
+          <option value="confidence">Confidence</option>
+          <option value="artist">Artist</option>
+          <option value="album">Album</option>
+        </select>
+      </div>
+
+      {wrongMatchNotice ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-3 flex flex-col gap-3 border-l-2 border-[#F08A4B] bg-[#F08A4B]/8 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="min-w-0">
+            <p className="text-sm text-[#FFF4E8]/78">
+              Hidden {wrongMatchNotice.discogsTitle} for{" "}
+              {wrongMatchNotice.sourceAlbum} on this device.
             </p>
-            <ul className="mt-2 space-y-1">
-              {payload.matchRun.failures.slice(0, 3).map((failure) => (
-                <li key={`${failure.searchUnit.id}:${failure.error.code}`}>
-                  {failure.searchUnit.artist} - {failure.searchUnit.album}:{" "}
-                  {failure.error.message}
-                  {failure.error.retryAfterSeconds !== null
-                    ? ` Try again in ${formatRetryDelay(
-                        failure.error.retryAfterSeconds,
-                      )}.`
-                    : ""}
-                </li>
-              ))}
-            </ul>
+            <p className="mt-1 text-xs leading-5 text-[#FFF4E8]/48">
+              Search Discogs for the release you actually want.
+            </p>
           </div>
-        ) : null}
-      </div>
-
-      <div className="mt-5 flex flex-col gap-3 border border-white/10 bg-black/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-[#FFF4E8]/42">
-            <SlidersHorizontal className="size-3.5" />
-            Vinyl crate
-          </p>
-          <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/62">
-            Ranked by listening signal, match confidence, vinyl format,
-            marketplace availability, and price practicality.
-          </p>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button
+              asChild
+              variant="outline"
+              className="h-9 rounded-full border-white/15 bg-white/8 px-4 text-xs text-[#FFF4E8] hover:bg-white/15"
+            >
+              <a
+                href={discogsSearchHref(wrongMatchNotice)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Find the right release
+                <ExternalLink className="size-3.5" />
+              </a>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={undoWrongMatch}
+              className="h-9 rounded-full px-3 text-xs text-[#FFF4E8]/64 hover:bg-white/8 hover:text-[#FFF4E8]"
+            >
+              Undo
+            </Button>
+          </div>
         </div>
+      ) : null}
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-[#FFF4E8]/68">
-            <input
-              type="checkbox"
-              checked={availableOnly}
-              onChange={(event) => setAvailableOnly(event.target.checked)}
-              className="size-4 accent-[#1DB954]"
-            />
-            Available only
-          </label>
-          <select
-            value={sortKey}
-            onChange={(event) => setSortKey(event.target.value as CrateSortKey)}
-            className="h-10 rounded-full border border-white/15 bg-[#05030A] px-4 text-sm text-[#FFF4E8] outline-none focus:border-[#1DB954]"
-            aria-label="Sort vinyl crate"
-          >
-            <option value="recommendation">Recommendation</option>
-            <option value="confidence">Confidence</option>
-            <option value="availability">Availability</option>
-            <option value="price">Estimated price</option>
-            <option value="artist">Artist</option>
-            <option value="album">Album</option>
-          </select>
-        </div>
-      </div>
+      {markError ? (
+        <p className="mt-3 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm text-[#FFF4E8]/72">
+          {markError}
+        </p>
+      ) : null}
 
       {visibleRecords.length > 0 ? (
         <div className="mt-4 space-y-4">
           {visibleRecords.map((record, index) => {
             const recordId = getCrateRecordId(record);
-            const isSaved = wishlistIds.has(recordId);
+            const collectionState =
+              collectionStateByRecordId.get(recordId) ??
+              (record.result.state === "owned" ||
+              record.result.state === "wanted"
+                ? record.result.state
+                : null);
+            const isMarking = markingRecordId === recordId;
 
             return (
               <article
@@ -1335,20 +1405,22 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap gap-2">
-                          <Badge className="border-[#1DB954]/25 bg-[#1DB954]/15 text-[#BDF5CB]">
-                            {record.match.recommendationLabel} ·{" "}
-                            {record.match.recommendationScore}/100
-                          </Badge>
                           <Badge className="border-white/10 bg-black/25 text-[#FFF4E8]/72">
                             {record.match.confidenceLabel} ·{" "}
                             {record.match.confidence}/100
                           </Badge>
-                          <Badge className="border-white/10 bg-black/25 text-[#FFF4E8]/72">
-                            {record.match.availability.label}
-                          </Badge>
-                          <Badge className="border-white/10 bg-black/25 text-[#FFF4E8]/72">
-                            {record.match.priceHint.label}
-                          </Badge>
+                          {collectionState ? (
+                            <LabelBadge
+                              size="md"
+                              tone={
+                                collectionState === "owned" ? "neutral" : "quiet"
+                              }
+                            >
+                              {collectionState === "owned"
+                                ? "In collection"
+                                : "Wanted"}
+                            </LabelBadge>
+                          ) : null}
                         </div>
 
                         <h3 className="mt-3 text-2xl font-semibold leading-tight text-[#FFF4E8]">
@@ -1375,15 +1447,48 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
                         <Button
                           type="button"
                           variant="outline"
-                          onClick={() => toggleWishlist(record)}
+                          disabled={isMarking || !record.match.markToken}
+                          onClick={() =>
+                            markCollectionState(record, "owned")
+                          }
                           className="h-10 rounded-full border-white/15 bg-white/8 px-4 text-sm text-[#FFF4E8] hover:bg-white/15"
                         >
-                          {isSaved ? (
-                            <BookmarkCheck className="size-4" />
+                          {isMarking ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Check className="size-4" />
+                          )}
+                          {collectionState === "owned"
+                            ? "Owned"
+                            : "Mark owned"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={isMarking || !record.match.markToken}
+                          onClick={() =>
+                            markCollectionState(record, "wanted")
+                          }
+                          className="h-10 rounded-full border-white/15 bg-white/8 px-4 text-sm text-[#FFF4E8] hover:bg-white/15"
+                        >
+                          {isMarking ? (
+                            <Loader2 className="size-4 animate-spin" />
                           ) : (
                             <Bookmark className="size-4" />
                           )}
-                          {isSaved ? "Saved" : "Save"}
+                          {collectionState === "wanted"
+                            ? "Wanted"
+                            : "Mark wanted"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => markWrongMatch(record)}
+                          title="Hide this release for this album"
+                          className="h-10 rounded-full px-3 text-sm text-[#FFF4E8]/58 hover:bg-white/8 hover:text-[#FFF4E8]"
+                        >
+                          <X className="size-4" aria-hidden="true" />
+                          Wrong match
                         </Button>
                         {record.match.uri ? (
                           <Button
@@ -1400,14 +1505,14 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
                             </a>
                           </Button>
                         ) : null}
-                        {record.result.searchUnit.spotifyAlbumUrl ? (
+                        {record.result.searchUnit.source.albumUrl ? (
                           <Button
                             asChild
                             variant="outline"
                             className="h-10 rounded-full border-white/15 bg-white/8 px-4 text-sm text-[#FFF4E8] hover:bg-white/15"
                           >
                             <a
-                              href={record.result.searchUnit.spotifyAlbumUrl}
+                              href={record.result.searchUnit.source.albumUrl}
                               target="_blank"
                               rel="noreferrer"
                             >
@@ -1422,7 +1527,7 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
                     <div className="mt-5 grid gap-4 lg:grid-cols-2">
                       <div className="border-l border-[#D34278]/45 bg-[#D34278]/8 px-4 py-3">
                         <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/40">
-                          Why this
+                          Why it’s here
                         </p>
                         <ul className="mt-2 space-y-1 text-sm leading-6 text-[#FFF4E8]/68">
                           {record.match.whyThis.map((reason) => (
@@ -1433,7 +1538,7 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
 
                       <div className="border-l border-white/15 bg-black/20 px-4 py-3">
                         <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/40">
-                          Match evidence
+                          The match
                         </p>
                         <ul className="mt-2 space-y-1 text-sm leading-6 text-[#FFF4E8]/62">
                           {record.match.reasons.map((reason) => (
@@ -1450,8 +1555,9 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         </div>
       ) : (
         <p className="mt-4 text-sm text-[#FFF4E8]/55">
-          No strong Discogs matches crossed the automatic recommendation
-          threshold.
+          {crateRecords.length > 0
+            ? "Every match was marked wrong. Undo a correction to bring one back."
+            : "No album cleared the matching threshold."}
         </p>
       )}
 
@@ -1459,6 +1565,11 @@ function VinylCrateResults({ payload }: { payload: DiscogsMatchPayload }) {
         reviewItems={reviewItems}
         failures={payload.matchRun.failures}
       />
+
+      <p className="mt-6 border-t border-white/8 pt-4 text-xs leading-5 text-[#FFF4E8]/38">
+        {getRateLimitLabel(payload.matchRun.rateLimit)} Requests were spaced by{" "}
+        {payload.matchRun.requestDelayMs.toLocaleString()}ms.
+      </p>
     </div>
   );
 }
@@ -1483,16 +1594,16 @@ function DiscogsUnresolvedResults({
     <section className="mt-6 border border-[#F08A4B]/18 bg-[#05030A]/55 p-4 sm:p-5">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-[#F08A4B]/72">
+          <p className="text-xs uppercase tracking-[0.28em] text-[#FFF4E8]/56">
             Needs review
           </p>
           <h3 className="mt-2 text-xl font-semibold text-[#FFF4E8]">
-            Unmatched and weak Discogs results
+            Unmatched and weak results
           </h3>
         </div>
         <p className="max-w-xl text-sm leading-6 text-[#FFF4E8]/58">
-          These albums are not guaranteed recommendations. Review the Discogs
-          candidate manually before saving or buying.
+          These aren’t recommendations yet. Check the Discogs candidate
+          before changing collection state.
         </p>
       </div>
 
@@ -1639,24 +1750,49 @@ function DiscogsUnresolvedResults({
 
 function ImportSummaryPanel({
   summary,
+  onClose,
 }: {
   summary: SpotifyPlaylistImportSummary;
+  onClose: () => void;
 }) {
-  const sourceLabel = summary.sourceType === "album" ? "album" : "playlist";
-  const sourceTitle = summary.playlistName ?? `Selected ${sourceLabel}`;
-  const visibleCandidates = summary.albumCandidates.slice(0, 12);
-  const featuredCandidate = summary.albumCandidates[0];
-  const featuredCoverUrl = featuredCandidate?.imageUrl ?? null;
-  const featuredArtistImageUrl = featuredCandidate?.artistImageUrl ?? null;
-  const [discogsMatchState, setDiscogsMatchState] = useState<
+  const [matchState, setMatchState] = useState<
     | { status: "idle"; payload: null; message: null }
     | { status: "loading"; payload: null; message: null }
     | { status: "ready"; payload: DiscogsMatchPayload; message: null }
     | { status: "error"; payload: null; message: string }
   >({ status: "idle", payload: null, message: null });
+  const [activeView, setActiveView] = useState<"source" | "matches">("source");
+  const [expandedAlbumIds, setExpandedAlbumIds] = useState<string[]>([]);
+  const [showAllAlbums, setShowAllAlbums] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const searchUnitCount = summary.discogsSearchUnits.length;
+  const hasMatches = matchState.status === "ready";
+  const visibleCandidates = showAllAlbums
+    ? summary.albumCandidates
+    : summary.albumCandidates.slice(0, IMPORT_ALBUM_PREVIEW_LIMIT);
+  const showMatchesView = activeView === "matches" && hasMatches;
+
+  const sourceStats: Array<[string, number]> = [
+    ["Tracks", summary.sourceTracksFound],
+    ["Albums", summary.uniqueAlbumCandidates],
+    ["Duplicates", summary.duplicateTracksRemoved],
+    ["Skipped", summary.skippedTracks],
+  ];
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [activeView]);
+
+  function toggleAlbumTracks(albumId: string) {
+    setExpandedAlbumIds((current) =>
+      current.includes(albumId)
+        ? current.filter((id) => id !== albumId)
+        : [...current, albumId],
+    );
+  }
 
   async function matchToDiscogs() {
-    setDiscogsMatchState({ status: "loading", payload: null, message: null });
+    setMatchState({ status: "loading", payload: null, message: null });
 
     try {
       const payload = await fetchJson<DiscogsMatchPayload>(
@@ -1672,9 +1808,10 @@ function ImportSummaryPanel({
         },
       );
 
-      setDiscogsMatchState({ status: "ready", payload, message: null });
+      setMatchState({ status: "ready", payload, message: null });
+      setActiveView("matches");
     } catch (error) {
-      setDiscogsMatchState({
+      setMatchState({
         status: "error",
         payload: null,
         message:
@@ -1688,344 +1825,375 @@ function ImportSummaryPanel({
     }
   }
 
+  function handlePrimaryAction() {
+    if (matchState.status === "ready") {
+      setActiveView("matches");
+      return;
+    }
+
+    void matchToDiscogs();
+  }
+
+  function getFooterCopy() {
+    if (showMatchesView) {
+      return "Check each match before saving it to your collection.";
+    }
+
+    if (matchState.status === "error") {
+      return "Discogs could not be reached. Try again when you are ready.";
+    }
+
+    if (matchState.status === "loading") {
+      return `Searching Discogs for ${searchUnitCount.toLocaleString()} ${
+        searchUnitCount === 1 ? "album" : "albums"
+      }. This can take a minute.`;
+    }
+
+    if (searchUnitCount === 0) {
+      return "This source has no album metadata to match.";
+    }
+
+    if (matchState.status === "ready") {
+      return `${matchState.payload.matchRun.searchedUnits.toLocaleString()} ${
+        matchState.payload.matchRun.searchedUnits === 1 ? "album" : "albums"
+      } matched. Open the crate when you are ready.`;
+    }
+
+    return `${searchUnitCount.toLocaleString()} ${
+      searchUnitCount === 1 ? "album" : "albums"
+    } · one Discogs search per album`;
+  }
+
+  const footerCopy = getFooterCopy();
+
   return (
-    <section className="overflow-hidden rounded-3xl border border-white/15 bg-[#05030A]/95 shadow-[0_40px_120px_rgba(0,0,0,0.62)] ring-1 ring-[#D34278]/15">
-      <div className="relative border-b border-white/10 px-5 py-6 sm:px-8 sm:py-7">
-        <div
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_0%,rgba(240,138,75,0.24),transparent_30%),radial-gradient(circle_at_82%_12%,rgba(211,66,120,0.22),transparent_32%),linear-gradient(135deg,rgba(109,42,168,0.28),transparent_48%)]"
-          aria-hidden="true"
-        />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-end">
-            <div className="relative w-fit shrink-0 pb-4 pr-4">
-              <div className="relative size-28 overflow-hidden rounded-[1.35rem] border border-white/15 bg-[#160A24] shadow-[0_24px_70px_rgba(0,0,0,0.42)] sm:size-36">
-                {featuredCoverUrl ? (
-                  <div
-                    className="h-full w-full bg-cover bg-center"
-                    style={{ backgroundImage: `url(${featuredCoverUrl})` }}
-                    aria-label={`${featuredCandidate?.album ?? sourceTitle} album cover`}
-                    role="img"
-                  />
-                ) : (
-                  <div className="grid h-full w-full place-items-center bg-[radial-gradient(circle_at_35%_25%,rgba(211,66,120,0.28),transparent_38%),#160A24] text-[#FFF4E8]/58">
-                    <Disc3 className="size-10" />
-                  </div>
-                )}
-                <div
-                  className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-white/10"
-                  aria-hidden="true"
-                />
-              </div>
-              <div className="absolute bottom-0 right-0 size-16 overflow-hidden rounded-full border-2 border-[#05030A] bg-[#160A24] shadow-[0_16px_36px_rgba(0,0,0,0.45)] ring-1 ring-white/20 sm:size-20">
-                {featuredArtistImageUrl ? (
-                  <div
-                    className="h-full w-full bg-cover bg-center"
-                    style={{
-                      backgroundImage: `url(${featuredArtistImageUrl})`,
-                    }}
-                    aria-label={`${featuredCandidate?.primaryArtist ?? "Primary artist"} artist image`}
-                    role="img"
-                  />
-                ) : (
-                  <div className="grid h-full w-full place-items-center bg-[radial-gradient(circle_at_40%_25%,rgba(240,138,75,0.25),transparent_42%),#160A24] text-[#FFF4E8]/52">
-                    <Music2 className="size-6" />
-                  </div>
-                )}
-              </div>
-            </div>
-
+    <section className="flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-8"
+      >
+        {showMatchesView ? (
+          <div>
             <div>
-              <p className="text-xs uppercase tracking-[0.42em] text-[#1DB954]">
-                Crate intake
+              <p className="text-xs uppercase tracking-[0.32em] text-[#FFF4E8]/42">
+                Discogs matches
               </p>
-              <h2
-                id="import-summary-heading"
-                className="mt-3 max-w-3xl font-serif text-4xl italic leading-none text-[#FFF4E8] sm:text-5xl"
-              >
-                {sourceTitle}
-              </h2>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-[#FFF4E8]/68">
-                Review the album signals WAXLIST found before Discogs matching.
-                Each candidate keeps the exact source tracks that caused it to
-                be included.
-              </p>
+              <h3 className="mt-1 font-serif text-2xl italic leading-tight text-[#FFF4E8]">
+                Match results
+              </h3>
             </div>
-          </div>
-
-          <div className="grid gap-3 lg:min-w-[30rem]">
-            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              {[
-                ["Tracks", summary.sourceTracksFound],
-                ["Albums", summary.uniqueAlbumCandidates],
-                ["Duplicates", summary.duplicateTracksRemoved],
-                ["Skipped", summary.skippedTracks],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="border-l border-white/15 bg-black/20 px-4 py-3 backdrop-blur"
-                >
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/42">
-                    {label}
-                  </p>
-                  <p className="mt-2 text-xl font-semibold text-[#FFF4E8]">
-                    {value.toLocaleString()}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {featuredCandidate ? (
-              <div className="border border-white/10 bg-black/20 p-4 backdrop-blur">
-                <p className="text-xs uppercase tracking-[0.24em] text-[#FFF4E8]/40">
-                  Strongest signal
-                </p>
-                <p className="mt-2 truncate text-sm font-medium text-[#FFF4E8]">
-                  {featuredCandidate.album}
-                </p>
-                <p className="mt-1 text-xs text-[#FFF4E8]/50">
-                  {featuredCandidate.sourceTrackCount.toLocaleString()} source{" "}
-                  {featuredCandidate.sourceTrackCount === 1
-                    ? "track"
-                    : "tracks"}{" "}
-                  by {featuredCandidate.primaryArtist}
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      <div className="px-5 py-5 sm:px-8 sm:py-6">
-        <div className="flex flex-col gap-3 text-sm text-[#FFF4E8]/58 sm:flex-row sm:items-center sm:justify-between">
-          <p>
-            Reviewed {summary.reviewedTrackTotal.toLocaleString()} of{" "}
-            {summary.playlistTrackTotal.toLocaleString()} {sourceLabel} entries.
-          </p>
-          <p>
-            {summary.compilationCandidates.toLocaleString()} compilation{" "}
-            {summary.compilationCandidates === 1 ? "candidate" : "candidates"}
-          </p>
-        </div>
-
-        {summary.lowQualityReasons.length > 0 ? (
-          <div className="mt-5 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3">
-            <p className="text-sm font-medium text-[#FFF4E8]">
-              Source needs review
-            </p>
-            <ul className="mt-2 space-y-1 text-sm leading-6 text-[#FFF4E8]/70">
-              {summary.lowQualityReasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
+            <VinylCrateResults payload={matchState.payload} />
           </div>
         ) : (
-          <p className="mt-5 border-l-2 border-[#1DB954] bg-[#1DB954]/8 px-4 py-3 text-sm text-[#FFF4E8]/66">
-            Metadata is usable for album-level matching.
-          </p>
-        )}
+          <div className="flex flex-col gap-7">
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl bg-white/8 sm:grid-cols-4">
+              {sourceStats.map(([label, value]) => (
+                <div key={label} className="bg-[#0B0713] px-4 py-3">
+                  <dt className="text-[0.68rem] uppercase tracking-[0.22em] text-[#FFF4E8]/42">
+                    {label}
+                  </dt>
+                  <dd className="mt-1.5 text-xl font-semibold tabular-nums text-[#FFF4E8]">
+                    {value.toLocaleString()}
+                  </dd>
+                </div>
+              ))}
+            </dl>
 
-        <div className="mt-5 border border-white/10 bg-black/25 p-4 backdrop-blur">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-[#FFF4E8]/40">
-                Discogs search units
-              </p>
-              <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/66">
-                {summary.discogsSearchUnits.length.toLocaleString()} normalized{" "}
-                {summary.discogsSearchUnits.length === 1 ? "album" : "albums"}{" "}
-                ready. WAXLIST will send one Discogs search per normalized
-                album, not one per Spotify track.
+            <div className="flex flex-col gap-2">
+              {summary.lowQualityReasons.length > 0 ? (
+                <div className="flex gap-3 border-l-2 border-[#F08A4B] bg-[#F08A4B]/8 px-4 py-3">
+                  <CircleAlert
+                    className="mt-0.5 size-4 shrink-0 text-[#F08A4B]"
+                    aria-hidden="true"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-[#FFF4E8]">
+                      Source needs review
+                    </p>
+                    <ul className="mt-1 space-y-1 text-sm leading-6 text-[#FFF4E8]/68">
+                      {summary.lowQualityReasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ) : (
+                <p className="flex items-start gap-2.5 text-sm leading-6 text-[#FFF4E8]/60">
+                  <CircleCheck
+                    className="mt-0.5 size-4 shrink-0 text-[#1DB954]"
+                    aria-hidden="true"
+                  />
+                  Metadata looks good for album matching.
+                </p>
+              )}
+              <p className="text-xs leading-5 text-[#FFF4E8]/38">
+                Reviewed {summary.reviewedTrackTotal.toLocaleString()} of{" "}
+                {summary.playlistTrackTotal.toLocaleString()} tracks
+                {summary.compilationCandidates > 0
+                  ? ` · ${summary.compilationCandidates.toLocaleString()} compilation ${
+                      summary.compilationCandidates === 1
+                        ? "candidate"
+                        : "candidates"
+                    }`
+                  : ""}
               </p>
             </div>
-            <Button
-              type="button"
-              disabled={
-                discogsMatchState.status === "loading" ||
-                summary.discogsSearchUnits.length === 0
-              }
-              onClick={matchToDiscogs}
-              className="h-11 shrink-0 rounded-full bg-[#1DB954] px-6 text-sm font-semibold text-[#041008] hover:bg-[#22d162] disabled:bg-white/15 disabled:text-[#FFF4E8]/35"
-            >
-              {discogsMatchState.status === "loading" ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Matching
-                </>
-              ) : (
-                "Match to Discogs"
-              )}
-            </Button>
-          </div>
 
-          {discogsMatchState.status === "error" ? (
-            <p className="mt-4 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
-              {discogsMatchState.message}
-            </p>
-          ) : null}
+            {matchState.status === "error" ? (
+              <p
+                role="alert"
+                className="border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72"
+              >
+                {matchState.message}
+              </p>
+            ) : null}
 
-          {summary.discogsSearchUnits.length === 0 ? (
-            <p className="mt-4 border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
-              No album-level Discogs searches are ready for this source. Choose
-              a playlist or saved album with Spotify album metadata, then review
-              the import again.
-            </p>
-          ) : null}
+            {searchUnitCount === 0 ? (
+              <p className="border-l-2 border-[#F08A4B] bg-[#F08A4B]/10 px-4 py-3 text-sm leading-6 text-[#FFF4E8]/72">
+                Nothing to match yet. Pick a playlist or saved album with album
+                metadata, then review the import again.
+              </p>
+            ) : null}
 
-          {discogsMatchState.status === "ready" ? (
-            <VinylCrateResults payload={discogsMatchState.payload} />
-          ) : null}
-        </div>
+            <section aria-labelledby="import-albums-heading">
+              <div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3
+                    id="import-albums-heading"
+                    className="text-base font-semibold text-[#FFF4E8]"
+                  >
+                    Albums in this import
+                  </h3>
+                  <p className="shrink-0 text-xs uppercase tracking-[0.22em] text-[#FFF4E8]/38">
+                    {summary.uniqueAlbumCandidates.toLocaleString()}{" "}
+                    {summary.uniqueAlbumCandidates === 1 ? "album" : "albums"}
+                  </p>
+                </div>
+                <p className="mt-1 text-sm text-[#FFF4E8]/52">
+                  Open a row to see the tracks that put it here.
+                </p>
+              </div>
 
-        <div className="mt-6 space-y-3">
-          {visibleCandidates.map((candidate, index) => (
-            <article
-              key={candidate.id}
-              className="group border border-white/10 bg-white/[0.055] p-4 transition hover:border-white/20 hover:bg-white/[0.075] sm:p-5"
-            >
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
-                <div className="min-w-0">
-                  <div className="flex items-start gap-4">
-                    <div className="relative size-16 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#160A24]">
-                      {candidate.imageUrl ? (
-                        <div
-                          className="h-full w-full bg-cover bg-center"
-                          style={{
-                            backgroundImage: `url(${candidate.imageUrl})`,
-                          }}
-                          aria-label={`${candidate.album} album cover`}
-                          role="img"
-                        />
-                      ) : (
-                        <div className="grid h-full w-full place-items-center text-[#FFF4E8]/42">
-                          <Disc3 className="size-6" />
-                        </div>
+              <ol className="mt-4 overflow-hidden rounded-2xl bg-white/[0.04]">
+                {visibleCandidates.map((candidate, index) => {
+                  const isExpanded = expandedAlbumIds.includes(candidate.id);
+                  const tracksId = `import-album-tracks-${index}`;
+                  const isRevealed =
+                    showAllAlbums && index >= IMPORT_ALBUM_PREVIEW_LIMIT;
+
+                  return (
+                    <li
+                      key={candidate.id}
+                      className={cn(
+                        "border-t border-white/8 first:border-t-0",
+                        isExpanded && "bg-white/[0.03]",
+                        isRevealed && "wax-reveal",
                       )}
-                      <span className="absolute left-1.5 top-1.5 rounded-full bg-black/65 px-1.5 py-0.5 text-[0.62rem] tabular-nums text-[#FFF4E8]/75">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
-                    </div>
-                    <div className="min-w-0">
-                      <h3 className="text-xl font-semibold leading-tight text-[#FFF4E8]">
-                        {candidate.album}
-                      </h3>
-                      <div className="mt-2 flex min-w-0 items-center gap-2">
-                        <div className="size-7 shrink-0 overflow-hidden rounded-full border border-white/10 bg-[#160A24]">
-                          {candidate.artistImageUrl ? (
+                      style={
+                        isRevealed
+                          ? {
+                              animationDelay: `${Math.min(
+                                index - IMPORT_ALBUM_PREVIEW_LIMIT,
+                                8,
+                              ) * 30}ms`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <div className="flex items-start gap-3 px-3 py-3 sm:px-4">
+                        <div className="relative size-12 shrink-0 overflow-hidden rounded-lg bg-[#160A24] sm:size-14">
+                          {candidate.imageUrl ? (
                             <div
                               className="h-full w-full bg-cover bg-center"
                               style={{
-                                backgroundImage: `url(${candidate.artistImageUrl})`,
+                                backgroundImage: `url(${candidate.imageUrl})`,
                               }}
-                              aria-label={`${candidate.primaryArtist} artist image`}
+                              aria-label={`${candidate.album} album cover`}
                               role="img"
                             />
                           ) : (
                             <div className="grid h-full w-full place-items-center text-[#FFF4E8]/42">
-                              <Music2 className="size-3.5" />
+                              <Disc3 className="size-5" aria-hidden="true" />
                             </div>
                           )}
                         </div>
-                        <p className="min-w-0 truncate text-sm text-[#FFF4E8]/62">
-                          {candidate.primaryArtist}
-                          {candidate.releaseDate
-                            ? ` - ${candidate.releaseDate}`
-                            : ""}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-[#FFF4E8]/62">
-                      {candidate.sourceTrackCount} source{" "}
-                      {candidate.sourceTrackCount === 1 ? "track" : "tracks"}
-                    </span>
-                    {candidate.duplicateTracksRemoved > 0 ? (
-                      <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-[#FFF4E8]/62">
-                        {candidate.duplicateTracksRemoved} duplicate{" "}
-                        {candidate.duplicateTracksRemoved === 1
-                          ? "track"
-                          : "tracks"}{" "}
-                        removed
-                      </span>
-                    ) : null}
-                    {candidate.isCompilation ? (
-                      <span className="rounded-full border border-[#F08A4B]/25 bg-[#F08A4B]/10 px-3 py-1 text-xs text-[#FFF4E8]/72">
-                        Compilation handling
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-[#FFF4E8]/50">
-                    {candidate.handlingNote}
-                  </p>
-                  {candidate.albumExternalUrl ? (
-                    <Button
-                      asChild
-                      variant="outline"
-                      className="mt-4 h-9 rounded-full border-white/15 bg-white/8 px-4 text-sm text-[#FFF4E8] hover:bg-white/15"
-                    >
-                      <a
-                        href={candidate.albumExternalUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Play album
-                        <CirclePlay className="size-4" />
-                      </a>
-                    </Button>
-                  ) : null}
-                </div>
-
-                <div className="border-t border-white/10 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-                  <p className="text-xs uppercase tracking-[0.28em] text-[#FFF4E8]/38">
-                    Individual tracks
-                  </p>
-                  <ol className="mt-3 space-y-2">
-                    {candidate.sourceTracks.map((track, trackIndex) => (
-                      <li
-                        key={`${track.id ?? track.name}-${trackIndex}`}
-                        className="flex items-start gap-3 text-sm leading-5"
-                      >
-                        <span className="mt-0.5 w-5 shrink-0 text-right text-xs tabular-nums text-[#FFF4E8]/32">
-                          {trackIndex + 1}
-                        </span>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[#FFF4E8]/78">
-                            {track.name}
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <h4 className="min-w-0 truncate text-sm font-semibold text-[#FFF4E8] sm:text-base">
+                              {candidate.album}
+                            </h4>
+                            {candidate.isCompilation ? (
+                              <LabelBadge size="xs" tone="quiet">
+                                Compilation
+                              </LabelBadge>
+                            ) : null}
+                          </div>
+                          <p className="mt-0.5 truncate text-sm text-[#FFF4E8]/55">
+                            {candidate.primaryArtist}
+                            {candidate.releaseDate
+                              ? ` · ${candidate.releaseDate}`
+                              : ""}
                           </p>
-                          <p className="truncate text-xs text-[#FFF4E8]/40">
-                            {track.primaryArtist}
+                          <p className="mt-1 text-xs text-[#FFF4E8]/38">
+                            {candidate.sourceTrackCount.toLocaleString()}{" "}
+                            {candidate.sourceTrackCount === 1 ? "track" : "tracks"}
+                            {candidate.duplicateTracksRemoved > 0
+                              ? ` · ${candidate.duplicateTracksRemoved.toLocaleString()} ${
+                                  candidate.duplicateTracksRemoved === 1
+                                    ? "duplicate"
+                                    : "duplicates"
+                                } removed`
+                              : ""}
                           </p>
                         </div>
-                        {track.externalUrl ? (
-                          <a
-                            href={track.externalUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/8 px-2 py-1 text-[0.68rem] font-medium text-[#FFF4E8]/72 transition hover:bg-white/14 hover:text-[#FFF4E8]"
-                            aria-label={`Play ${track.name} on Spotify`}
-                          >
-                            <CirclePlay className="size-3" />
-                            Play
-                          </a>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
 
-        {summary.albumCandidates.length > visibleCandidates.length ? (
-          <p className="mt-5 text-center text-sm text-[#FFF4E8]/45">
-            Showing {visibleCandidates.length.toLocaleString()} of{" "}
-            {summary.albumCandidates.length.toLocaleString()} album candidates.
-          </p>
-        ) : null}
+                        <div className="flex shrink-0 items-center gap-1">
+                          {candidate.albumExternalUrl ? (
+                            <a
+                              href={candidate.albumExternalUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Play ${candidate.album} on Spotify`}
+                              className="inline-flex size-9 items-center justify-center rounded-full text-[#FFF4E8]/48 transition hover:bg-white/8 hover:text-[#FFF4E8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFF4E8]/50"
+                            >
+                              <CirclePlay
+                                className="size-4"
+                                aria-hidden="true"
+                              />
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            aria-expanded={isExpanded}
+                            aria-controls={tracksId}
+                            onClick={() => toggleAlbumTracks(candidate.id)}
+                            className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[#FFF4E8]/58 transition hover:bg-white/8 hover:text-[#FFF4E8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFF4E8]/50"
+                          >
+                            Tracks
+                            <ChevronDown
+                              className={cn(
+                                "size-4 transition-transform",
+                                isExpanded && "rotate-180",
+                              )}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </div>
+                      </div>
+
+                      <Collapse open={isExpanded} id={tracksId}>
+                        <div className="px-3 pb-4 sm:pl-[5.25rem] sm:pr-4">
+                          <p className="text-sm leading-6 text-[#FFF4E8]/48">
+                            {candidate.handlingNote}
+                          </p>
+                          <ol className="mt-3 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+                            {candidate.sourceTracks.map((track, trackIndex) => (
+                              <li
+                                key={`${track.id ?? track.name}-${trackIndex}`}
+                                className="flex items-baseline gap-2 text-sm"
+                              >
+                                <span className="w-4 shrink-0 text-right text-[0.68rem] tabular-nums text-[#FFF4E8]/30">
+                                  {trackIndex + 1}
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[#FFF4E8]/78">
+                                    {track.name}
+                                  </p>
+                                  <p className="truncate text-xs text-[#FFF4E8]/38">
+                                    {track.primaryArtist}
+                                  </p>
+                                </div>
+                                {track.externalUrl ? (
+                                  <a
+                                    href={track.externalUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    aria-label={`Play ${track.name} on Spotify`}
+                                    className="shrink-0 text-[#FFF4E8]/38 transition hover:text-[#FFF4E8]"
+                                  >
+                                    <CirclePlay
+                                      className="size-3.5"
+                                      aria-hidden="true"
+                                    />
+                                  </a>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </Collapse>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {summary.albumCandidates.length > IMPORT_ALBUM_PREVIEW_LIMIT ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAllAlbums((current) => !current)}
+                  className="mt-3 w-full cursor-pointer rounded-xl py-2 text-center text-sm text-[#FFF4E8]/55 transition hover:bg-white/5 hover:text-[#FFF4E8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFF4E8]/50"
+                >
+                  {showAllAlbums
+                    ? "Show fewer albums"
+                    : `Show all ${summary.albumCandidates.length.toLocaleString()} albums`}
+                </button>
+              ) : null}
+            </section>
+          </div>
+        )}
       </div>
+
+      <footer className="shrink-0 border-t border-white/10 bg-[#07040D] px-5 py-4 sm:px-8">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="min-w-0 text-sm leading-6 text-[#FFF4E8]/52">
+            {footerCopy}
+          </p>
+
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
+            {showMatchesView ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setActiveView("source")}
+                  className="h-10 flex-1 rounded-full px-4 text-sm text-[#FFF4E8]/68 hover:bg-white/8 hover:text-[#FFF4E8] sm:flex-none"
+                >
+                  <ArrowLeft className="size-4" aria-hidden="true" />
+                  Back to albums
+                </Button>
+                <Button
+                  type="button"
+                  onClick={onClose}
+                  className="h-10 flex-1 rounded-full bg-[#1DB954] px-6 text-sm font-semibold text-[#041008] hover:bg-[#22d162] sm:flex-none"
+                >
+                  Done
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                disabled={
+                  matchState.status === "loading" || searchUnitCount === 0
+                }
+                onClick={handlePrimaryAction}
+                className="h-11 w-full rounded-full bg-[#1DB954] px-6 text-sm font-semibold text-[#041008] hover:bg-[#22d162] disabled:bg-white/15 disabled:text-[#FFF4E8]/35 sm:w-auto"
+              >
+                {matchState.status === "loading" ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    Matching
+                  </>
+                ) : hasMatches ? (
+                  "View matches"
+                ) : (
+                  "Match to Discogs"
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+      </footer>
     </section>
   );
 }
@@ -2042,6 +2210,8 @@ function ImportSummaryDialog({
   const hasMounted = useHasMounted();
   const [isVisible, setIsVisible] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const clearCloseTimer = useCallback(() => {
     if (closeTimerRef.current) {
@@ -2079,6 +2249,56 @@ function ImportSummaryDialog({
       clearCloseTimer();
     };
   }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!summary || !isOpen) {
+      return;
+    }
+
+    const dialog = dialogRef.current;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const focusFrame = requestAnimationFrame(() => {
+      closeButtonRef.current?.focus();
+    });
+
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key !== "Tab" || !dialog) {
+        return;
+      }
+
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((element) => element.offsetParent !== null);
+
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || active === dialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", trapFocus);
+
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", trapFocus);
+      previouslyFocused?.focus();
+    };
+  }, [isOpen, summary]);
 
   useEffect(() => {
     if (!summary || !isOpen) {
@@ -2129,39 +2349,86 @@ function ImportSummaryDialog({
     return null;
   }
 
+  const sourceLabel = summary.sourceType === "album" ? "album" : "playlist";
+  const sourceTitle = summary.playlistName ?? `Selected ${sourceLabel}`;
+  const coverImageUrl = summary.albumCandidates[0]?.imageUrl ?? null;
+
   return createPortal(
-    <div
-      className={cn(
-        "fixed inset-0 z-[60] flex items-center justify-center bg-black/78 px-4 py-6 opacity-0 backdrop-blur-md transition-opacity duration-200 ease-out motion-reduce:transition-none sm:px-6",
-        isVisible && "opacity-100",
-      )}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="import-summary-heading"
-    >
+    <div className="wax-flat fixed inset-0 z-[60] flex items-end justify-center sm:items-center sm:p-6">
       <button
         type="button"
-        className="absolute inset-0 cursor-pointer"
-        aria-label="Close import summary"
+        aria-label="Close import review"
         onClick={requestClose}
-      />
-      <div
         className={cn(
-          "relative max-h-[calc(100vh-3rem)] w-full max-w-6xl translate-y-4 overflow-y-auto rounded-3xl opacity-0 outline-none transition-[opacity,transform] duration-200 ease-out motion-reduce:translate-y-0 motion-reduce:transition-none",
-          isVisible && "translate-y-0 opacity-100",
+          "absolute inset-0 cursor-pointer bg-black/78 backdrop-blur-md transition-opacity duration-200 ease-out motion-reduce:transition-none",
+          isVisible ? "opacity-100" : "opacity-0",
+        )}
+      />
+
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-summary-heading"
+        tabIndex={-1}
+        className={cn(
+          "relative flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl bg-[#07040D] opacity-0 shadow-[0_-24px_80px_rgba(0,0,0,0.6)] outline-none transition-[opacity,transform] duration-200 ease-out motion-reduce:translate-y-0 motion-reduce:transition-none sm:max-h-[calc(100dvh-3rem)] sm:rounded-3xl sm:shadow-[0_40px_120px_rgba(0,0,0,0.62)]",
+          isVisible ? "translate-y-0 opacity-100" : "translate-y-3",
         )}
       >
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="absolute right-4 top-4 z-10 size-10 rounded-full border-white/15 bg-black/65 text-[#FFF4E8] shadow-2xl backdrop-blur hover:bg-black/80"
-          aria-label="Close import summary"
-          onClick={requestClose}
-        >
-          <X className="size-4" />
-        </Button>
-        <ImportSummaryPanel summary={summary} />
+        <header className="relative shrink-0 overflow-hidden border-b border-white/10 px-5 py-4 sm:px-8 sm:py-5">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_-40%,rgba(240,138,75,0.2),transparent_46%),radial-gradient(circle_at_88%_-10%,rgba(211,66,120,0.18),transparent_44%)]"
+          />
+          <div className="relative flex items-start gap-3 sm:gap-4">
+            <div className="size-12 shrink-0 overflow-hidden rounded-xl bg-[#160A24] sm:size-14">
+              {coverImageUrl ? (
+                <div
+                  className="h-full w-full bg-cover bg-center"
+                  style={{ backgroundImage: `url(${coverImageUrl})` }}
+                  aria-label={`${sourceTitle} cover`}
+                  role="img"
+                />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-[#FFF4E8]/45">
+                  <Disc3 className="size-5" aria-hidden="true" />
+                </div>
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-[0.68rem] font-medium uppercase tracking-[0.32em] text-[#FFF4E8]/42">
+                Review import
+              </p>
+              <h2
+                id="import-summary-heading"
+                className="mt-1 truncate font-serif text-2xl italic leading-tight text-[#FFF4E8] sm:text-3xl"
+              >
+                {sourceTitle}
+              </h2>
+              <p className="mt-1 truncate text-sm text-[#FFF4E8]/52">
+                {summary.reviewedTrackTotal.toLocaleString()} of{" "}
+                {summary.playlistTrackTotal.toLocaleString()} tracks ·{" "}
+                {summary.uniqueAlbumCandidates.toLocaleString()}{" "}
+                {summary.uniqueAlbumCandidates === 1 ? "album" : "albums"}
+              </p>
+            </div>
+
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={requestClose}
+              aria-label="Close import review"
+              title="Close import review"
+              className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#FFF4E8]/8 text-[#FFF4E8]/64 transition hover:bg-[#FFF4E8]/14 hover:text-[#FFF4E8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FFF4E8]/60"
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        <ImportSummaryPanel summary={summary} onClose={requestClose} />
       </div>
     </div>,
     document.body,
@@ -2422,11 +2689,8 @@ function PlaylistPicker({
     <section className="rounded-3xl border border-white/10 bg-black/25 p-5 pb-24 shadow-2xl backdrop-blur-xl sm:p-6 sm:pb-28">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-[#FFF4E8]/45">
-            Source
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
-            Choose a source crate
+          <h2 className="text-2xl font-semibold text-[#FFF4E8]">
+            Pick a source
           </h2>
           <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/25 p-1">
             <button
@@ -2662,8 +2926,7 @@ function PlaylistPicker({
               ) : null}
             </div>
             <p className="mt-3 text-sm leading-6 text-[#FFF4E8]/52">
-              Filters the saved albums loaded on this page and keeps the query
-              in this browser only.
+              Searches this page only. The query stays in this browser.
             </p>
           </div>
 
@@ -2731,8 +2994,7 @@ function PlaylistPicker({
                 No matching albums on this page.
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/55">
-                Try another search term, clear the search, or page through more
-                saved albums.
+                Try another term, clear the search, or page through.
               </p>
             </div>
           ) : null}
@@ -2762,8 +3024,7 @@ function PlaylistPicker({
                 No saved albums found.
               </p>
               <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/55">
-                Spotify saved albums are albums added to your library. Liked
-                songs are separate and are not included here yet.
+                Saved albums only. Liked songs aren’t included yet.
               </p>
             </div>
           ) : null}
@@ -2811,34 +3072,49 @@ function PlaylistPicker({
 export function ConnectedWorkspace({
   initialWorkspace,
   showProfilePanel = true,
+  connectionState = "connected",
+  connectionNotice = null,
 }: {
   initialWorkspace?: SpotifyWorkspaceSnapshot | null;
   showProfilePanel?: boolean;
+  /**
+   * Server-resolved state of this browser's Spotify session. When the account
+   * has no usable session the workspace must not call the Spotify endpoints at
+   * all: those requests can only 401, which is what the collector saw as a
+   * silent failure after a refused account link.
+   */
+  connectionState?: "connected" | "not_connected";
+  /** The shell banner already explains and acts on a failed connection. */
+  connectionNotice?: SpotifyConnectionNotice | null;
 }) {
-  const [loadState, setLoadState] = useState<LoadState>(
-    initialWorkspace
-      ? {
-          status: "ready",
-          profile: initialWorkspace.profile,
-          playlists: initialWorkspace.playlists,
-          playlistPaging: {
-            limit: PLAYLIST_PAGE_LIMIT,
-            offset: 0,
-            total: initialWorkspace.totalPlaylists,
-            next:
-              initialWorkspace.playlists.length < initialWorkspace.totalPlaylists
-                ? ""
-                : null,
-            previous: null,
-          },
-          isPlaylistPageLoading: false,
-          playlistPageError: null,
-        }
-      : { status: "loading" },
-  );
+  const [loadState, setLoadState] = useState<LoadState>(() => {
+    if (initialWorkspace) {
+      return {
+        status: "ready",
+        profile: initialWorkspace.profile,
+        playlists: initialWorkspace.playlists,
+        playlistPaging: {
+          limit: PLAYLIST_PAGE_LIMIT,
+          offset: 0,
+          total: initialWorkspace.totalPlaylists,
+          next:
+            initialWorkspace.playlists.length < initialWorkspace.totalPlaylists
+              ? ""
+              : null,
+          previous: null,
+        },
+        isPlaylistPageLoading: false,
+        playlistPageError: null,
+      };
+    }
+
+    return connectionState === "not_connected"
+      ? { status: "disconnected" }
+      : { status: "loading" };
+  });
 
   useEffect(() => {
-    if (initialWorkspace) {
+    if (initialWorkspace || connectionState === "not_connected") {
       return;
     }
 
@@ -2885,7 +3161,7 @@ export function ConnectedWorkspace({
     return () => {
       isActive = false;
     };
-  }, [initialWorkspace]);
+  }, [initialWorkspace, connectionState]);
 
   async function loadPlaylistPage(offset: number) {
     const boundedOffset = Math.max(0, offset);
@@ -2941,6 +3217,17 @@ export function ConnectedWorkspace({
         <LoadingPanel showProfilePanel={showProfilePanel} />
       </div>
     );
+  }
+
+  if (loadState.status === "disconnected") {
+    // A hard block (for example a Spotify account owned by another WAXLIST
+    // account) carries no reconnect action, so the generic CTA stays hidden
+    // rather than inviting a retry that cannot succeed. A successful
+    // disconnect is not a block: connecting again is exactly what comes next.
+    const isHardBlock =
+      connectionNotice?.tone === "error" && connectionNotice.action === null;
+
+    return <DisconnectedPanel showConnect={!isHardBlock} />;
   }
 
   if (loadState.status === "error") {

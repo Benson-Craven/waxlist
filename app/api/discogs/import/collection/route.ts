@@ -7,6 +7,7 @@ import {
   jsonWithCollectionOwnerCookies,
   resolveCollectionOwner,
 } from "@/lib/collection/server";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import { getDatabaseEnv } from "@/lib/config";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -70,6 +71,8 @@ function readRunId(value: unknown) {
 }
 
 export async function GET(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsCollectionSync");
+  if (disabled) return disabled;
   const configError = configurationError();
 
   if (configError) {
@@ -88,6 +91,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsCollectionSync");
+  if (disabled) return disabled;
   const configError = configurationError();
 
   if (configError) {

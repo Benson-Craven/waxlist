@@ -1,6 +1,12 @@
+import { getServerCapabilities } from "@/lib/capabilities/server";
 import { getDatabaseEnv } from "@/lib/config";
-import { normalizeCollectionItemPatch } from "@/lib/collection/record";
 import {
+  normalizeCollectionItemPatch,
+  type CollectionItemPatch,
+} from "@/lib/collection/record";
+import {
+  collectionRecordForOwner,
+  deleteCollectionRecord,
   jsonWithCollectionOwnerCookies,
   resolveCollectionOwner,
   updateCollectionRecord,
@@ -33,11 +39,27 @@ function collectionAuthRequired() {
     {
       error: {
         code: "collection_auth_required",
-        message: "Connect Spotify before editing collection records.",
+        message: "Sign in before editing collection records.",
       },
     },
     { status: 401 },
   );
+}
+
+function publicCollectionPatch(
+  patch: CollectionItemPatch,
+): CollectionItemPatch {
+  return {
+    status: patch.status,
+    rating: patch.rating,
+    favourite: patch.favourite,
+    tags: patch.tags,
+    notes: patch.notes,
+    group: patch.group,
+    unit: patch.unit,
+    shelf: patch.shelf,
+    slot: patch.slot,
+  };
 }
 
 async function readJsonBody(request: NextRequest) {
@@ -91,7 +113,13 @@ export async function PATCH(
     return collectionAuthRequired();
   }
 
-  const record = await updateCollectionRecord(owner, id, patch);
+  const record = await updateCollectionRecord(
+    owner,
+    id,
+    getServerCapabilities().discogsRestrictedData
+      ? patch
+      : publicCollectionPatch(patch),
+  );
 
   if (!record) {
     return NextResponse.json(
@@ -105,5 +133,54 @@ export async function PATCH(
     );
   }
 
-  return jsonWithCollectionOwnerCookies(owner, { record });
+  return jsonWithCollectionOwnerCookies(owner, {
+    record: collectionRecordForOwner(record),
+  });
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
+  const configurationError = collectionConfigurationError();
+
+  if (configurationError) {
+    return configurationError;
+  }
+
+  const { id } = await context.params;
+
+  if (!id) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "invalid_collection_record_id",
+          message: "Collection record id is required.",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  const owner = await resolveCollectionOwner(request);
+
+  if (!owner) {
+    return collectionAuthRequired();
+  }
+
+  const deleted = await deleteCollectionRecord(owner, id);
+
+  if (!deleted) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "collection_record_not_found",
+          message: "Collection record was not found.",
+        },
+      },
+      { status: 404 },
+    );
+  }
+
+  return jsonWithCollectionOwnerCookies(owner, { deleted: true, id });
 }

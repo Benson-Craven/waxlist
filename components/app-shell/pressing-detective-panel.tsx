@@ -15,6 +15,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LabelBadge } from "@/components/ui/label-badge";
 import type { CollectionRecord } from "@/lib/collection/record";
 import {
   getPressingComparisonRows,
@@ -245,7 +246,7 @@ export function PressingDetectivePanel({
       setSummary(payload.identifyRun);
       setMessage(
         payload.identifyRun.failures.length > 0
-          ? "Some detailed Discogs identifiers could not load, so WAXLIST is keeping uncertainty visible."
+          ? "Some Discogs details didn't load, so uncertainty stays visible."
           : "Candidate releases loaded.",
       );
     } catch (error) {
@@ -452,14 +453,13 @@ export function PressingDetectivePanel({
             ) : (
               <RefreshCw className="size-4" aria-hidden="true" />
             )}
-            Refresh candidate details
+            Refresh details
           </Button>
 
           {summary ? (
             <p className="rounded-lg border border-[#FFF4E8]/8 bg-[#05030A]/40 px-3 py-2 text-xs leading-5 text-[#FFF4E8]/48">
-              Loaded {summary.returnedVersions.toLocaleString()} of{" "}
-              {summary.totalVersions.toLocaleString()} Discogs versions. Detailed
-              identifiers loaded for{" "}
+              {summary.returnedVersions.toLocaleString()} of{" "}
+              {summary.totalVersions.toLocaleString()} versions loaded. Detail for{" "}
               {summary.detailReleaseIds.length.toLocaleString()} candidates.
               {summary.truncated
                 ? ` The first ${summary.maxVersionCandidates.toLocaleString()} versions are shown for this MVP.`
@@ -469,8 +469,8 @@ export function PressingDetectivePanel({
 
           {hasNoViableMatches ? (
             <div className="rounded-xl border border-[#D34278]/20 bg-[#D34278]/8 p-3 text-xs leading-5 text-[#FFD7E4]">
-              No candidate currently matches the hard evidence. Try removing a
-              barcode or catalogue-number value if it may have been mistyped.
+              Nothing matches that evidence. If a barcode or catalogue number
+              might be mistyped, clear it and try again.
             </div>
           ) : null}
 
@@ -496,8 +496,7 @@ export function PressingDetectivePanel({
             </div>
           ) : rankedCandidates.length > 1 ? (
             <div className="rounded-xl border border-[#FFF4E8]/10 bg-[#05030A]/36 p-3 text-xs leading-5 text-[#FFF4E8]/52">
-              WAXLIST does not see a useful next discriminator in the loaded
-              metadata yet.
+              No useful next clue in the loaded metadata yet.
             </div>
           ) : null}
 
@@ -527,27 +526,27 @@ export function PressingDetectivePanel({
                         </p>
                       ) : null}
                     </div>
-                    <span
-                      className={cn(
-                        "shrink-0 rounded-full border px-2 py-1 text-[0.68rem]",
+                    <LabelBadge
+                      size="md"
+                      tone={
                         candidate.confidenceState === "Strong match"
-                          ? "border-[#1DB954]/24 bg-[#1DB954]/10 text-[#C8F7D8]"
+                          ? "neutral"
                           : candidate.confidenceState === "Likely match"
-                            ? "border-[#F08A4B]/24 bg-[#F08A4B]/10 text-[#FFE1C7]"
+                            ? "quiet"
                             : candidate.isViable
-                              ? "border-[#FFF4E8]/12 bg-[#FFF4E8]/7 text-[#FFF4E8]/62"
-                              : "border-[#D34278]/24 bg-[#D34278]/10 text-[#FFD7E4]",
-                      )}
+                              ? "quiet"
+                              : "attention"
+                      }
                     >
                       {candidate.isViable
                         ? candidate.confidenceState
                         : "Conflicting evidence"}
-                    </span>
+                    </LabelBadge>
                   </div>
 
                   <div className="mt-3 grid gap-2 text-xs leading-5">
                     {candidate.matchedSignals.slice(0, 3).map((signal) => (
-                      <p key={signal} className="flex gap-2 text-[#C8F7D8]/78">
+                      <p key={signal} className="flex gap-2 text-[#FFF4E8]/72">
                         <CheckCircle2
                           className="mt-0.5 size-3.5 shrink-0"
                           aria-hidden="true"
@@ -556,7 +555,7 @@ export function PressingDetectivePanel({
                       </p>
                     ))}
                     {candidate.conflictingSignals.slice(0, 2).map((signal) => (
-                      <p key={signal} className="flex gap-2 text-[#FFD7E4]/78">
+                      <p key={signal} className="flex gap-2 text-[#FFF4E8]/72">
                         <AlertTriangle
                           className="mt-0.5 size-3.5 shrink-0"
                           aria-hidden="true"

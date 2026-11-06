@@ -1,3 +1,4 @@
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import { getWishlistEnv } from "@/lib/config";
 import {
   copyWishlistCookieHeaders,
@@ -31,7 +32,7 @@ function wishlistConfigurationError() {
 }
 
 function jsonWithOwnerCookies(
-  owner: Awaited<ReturnType<typeof resolveWishlistOwner>>,
+  owner: NonNullable<Awaited<ReturnType<typeof resolveWishlistOwner>>>,
   payload: Record<string, unknown>,
   status = 200,
 ) {
@@ -40,6 +41,18 @@ function jsonWithOwnerCookies(
   copyWishlistCookieHeaders(owner, response);
 
   return response;
+}
+
+function authRequired() {
+  return NextResponse.json(
+    {
+      error: {
+        code: "wishlist_auth_required",
+        message: "Sign in before using your wantlist.",
+      },
+    },
+    { status: 401 },
+  );
 }
 
 async function readJsonBody(request: NextRequest) {
@@ -51,6 +64,9 @@ async function readJsonBody(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = wishlistConfigurationError();
 
   if (configurationError) {
@@ -58,12 +74,16 @@ export async function GET(request: NextRequest) {
   }
 
   const owner = await resolveWishlistOwner(request);
+  if (!owner) return authRequired();
   const records = await listWishlistRecords(owner);
 
   return jsonWithOwnerCookies(owner, { records });
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = wishlistConfigurationError();
 
   if (configurationError) {
@@ -90,12 +110,16 @@ export async function POST(request: NextRequest) {
   }
 
   const owner = await resolveWishlistOwner(request);
+  if (!owner) return authRequired();
   const savedRecord = await saveWishlistRecord(owner, record);
 
   return jsonWithOwnerCookies(owner, { record: savedRecord }, 201);
 }
 
 export async function DELETE(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = wishlistConfigurationError();
 
   if (configurationError) {
@@ -122,6 +146,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   const owner = await resolveWishlistOwner(request);
+  if (!owner) return authRequired();
 
   await removeWishlistRecord(owner, recordId);
 

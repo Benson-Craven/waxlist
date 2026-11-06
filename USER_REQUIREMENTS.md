@@ -4,7 +4,10 @@
 
 ## 1. Product Summary
 
-Build WAXLIST as a vinyl collection workspace. The first-stage MVP connects a user's Spotify listening data to Discogs vinyl catalogue/marketplace data and recommends records the user may want to buy. The next stage expands WAXLIST into a fast personal collection layer for collectors who want Discogs data, local/offline utility, smarter wantlist management, and in-shop decision support.
+Build WAXLIST as a Spotify-first, invite-only vinyl collection workspace with
+ListenBrainz as an alternative and individual YouTube links as a beta source.
+All sources normalize album evidence, resolve physical catalogue identities,
+and surface albums missing from WAXLIST-native collection state.
 
 The product should help users answer:
 
@@ -23,11 +26,68 @@ Former/alternate brainstorm names, now deprecated unless the user reopens naming
 
 Use `WAXLIST` for the UI, documentation, and product identity.
 
+## 1.1 Disabled-by-default Pressing-Proof Wedge
+
+The 2026-07-30 implementation adds an invite-beta vertical slice around:
+
+> Prove the pressing—do not guess.
+
+This wedge targets growing collectors who need guided help distinguishing
+versions. It does not supersede the current Spotify-first landing hierarchy
+until moderated validation succeeds. `WAXLIST_ENABLE_PRESSING_PROOF` must
+default to `false`.
+
+The shared public `/identify` and authenticated Digging surface must:
+
+1. Start with camera barcode capture or manual artist, title, barcode,
+   catalogue number, or Discogs release ID.
+2. Treat barcode as release-family discovery, never proof by itself.
+3. Ask one useful discriminator at a time in collector-effort order.
+4. Return only `exact`, `shortlist`, or `unknown`.
+5. Show matched, conflicting, and unavailable evidence without probability
+   percentages.
+6. Never eliminate a candidate only because Discogs metadata is missing.
+7. Never return `exact` from truncated, failed, or partially loaded candidate
+   comparisons.
+8. Allow one anonymous 24-hour preview family through a signed HTTP-only cookie.
+9. Require an invite-only account to save/resume and overlay native
+   owned/wanted/duplicate state.
+10. Persist unresolved evidence and remaining candidate IDs without writing a
+    probable release into collection truth.
+
+Catalogue-only endpoints:
+
+- `POST /api/discogs/pressings/search`
+- `POST /api/discogs/pressings/resolve`
+- authenticated `GET/POST/PATCH /api/pressing-investigations`
+
+Pressing catalogue responses may include release/version, formats, country/year,
+labels, catalogue numbers, barcodes, identifiers, pressing/manufacturing and
+mastering clues, attribution, freshness, rate-limit state, and Discogs deep
+links. They must not include images, marketplace/pricing/seller information,
+Discogs collection/wantlist data, or other user data.
+
+Full activation requires six moderated collector sessions covering one unique,
+one ambiguous, and one unresolvable copy plus save/resume. Required gates are
+zero false `exact` results, at least 15 of 18 correct outcomes without moderator
+correction, median unique-copy completion below two minutes, and at least four
+of six participants preferring the workflow to their normal Discogs process.
+Any false `exact` blocks release. Failed usability/preference gates retain
+pressing proof as a secondary feature.
+
 ## 2. Core Product Hypothesis
 
-People who already listen to music on Spotify may want to start or improve a vinyl collection, but they do not know which albums are worth buying, which pressings exist, or what is actually available.
+The 2026-07-24 Spotify-first beta direction supersedes the 2026-07-23
+ListenBrainz-first source order. The provider-neutral account and evidence
+boundaries remain: Managed Neon Auth owns identity, while Spotify,
+ListenBrainz, and YouTube are optional sources.
 
-The MVP should turn a Spotify playlist, saved albums, or top listening data into a ranked “vinyl crate” of Discogs records.
+Collectors deliberately save or scrobble music but still lack a reliable way to
+reconcile that evidence with the physical albums they already own or want.
+
+The beta defaults to Spotify playlist/saved-album intake. ListenBrainz remains
+an alternative. Individual YouTube links are accepted only as user-supplied
+evidence and never described as watch or listening history.
 
 The next-stage product hypothesis:
 
@@ -51,18 +111,29 @@ Secondary user:
 
 ## 4. Product Scope
 
-The existing Spotify-to-vinyl MVP must support:
+The invite-only beta must support:
 
-1. User connects Spotify.
-2. User selects one Spotify playlist or imports recent/top listening data where supported.
-3. App extracts tracks, artists, and album metadata.
-4. App deduplicates tracks by album and artist.
-5. App searches Discogs for vinyl releases matching those albums/artists.
-6. App ranks candidate vinyl records by match confidence and practical buyability.
-7. App displays a “vinyl crate” of recommended records.
-8. User can save records to a local wishlist.
-9. App caches Spotify and Discogs results to reduce API usage.
-10. App clearly shows uncertainty when a Discogs match is not reliable.
+1. User signs in with Managed Neon Auth email/password.
+2. Crate source selector defaults to Spotify and supports Spotify,
+   ListenBrainz, and YouTube.
+3. Spotify connects to the signed-in WAXLIST account with encrypted,
+   account-bound sessions and retains existing playlist/saved-album flows.
+4. ListenBrainz imports a 30, 90, or 365 day window; 90 is the default.
+5. YouTube accepts individual `youtube.com`, `youtu.be`, and Shorts URLs,
+   canonicalizes/deduplicates video IDs without fetching the URL, and requires
+   confirmed artist and album metadata before catalogue matching.
+6. YouTube playlist expansion is rejected with
+   `Playlist import is coming later`; watch-history import is labelled
+   `Coming soon` and fails closed.
+7. App searches fresh Discogs catalogue data for physical releases.
+8. App classifies reliable matches against WAXLIST-native owned/wanted state.
+9. User can mark a reliable result owned or wanted and open the provider or
+   Discogs deep link.
+10. Weak, incomplete, and unmatched evidence remains explicit.
+11. Listening snapshots are unique by WAXLIST user, provider, and source type.
+12. Only normalized source data is persisted. YouTube link records retain only
+    canonical URL, video ID, user-supplied artist/album, and optional note.
+13. Public Restricted Data capabilities remain absent and fail closed.
 
 The next implementation stage must support or prepare for:
 
@@ -72,10 +143,13 @@ The next implementation stage must support or prepare for:
 4. Global collection search by artist, title, label, barcode/catalog number where available, and Discogs identifiers.
 5. Digging mode for quick ownership/wantlist/duplicate checks while shopping.
 6. Smart wantlist fields: priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state.
-7. Shelf/location fields such as room, unit, shelf, slot, and notes.
+7. Shelf/location fields such as group, unit, shelf, slot, and notes.
 8. Collection health summaries: duplicates, high-value records, recent additions, unplayed/not-recently-listened records, and missing albums from artists the user collects or streams.
 9. A persistent record inspector for selected record details and actions.
 10. Focused overlays only for review/edit tasks, not as the main app structure.
+11. A spin log for owned records: optional side and note, local-day listening
+    history, and stats that give the collector a reason to return between
+    purchases.
 
 ## 5. Design Requirements
 
@@ -87,7 +161,8 @@ Landing page requirements are strict:
 - H1 text: exactly `WAXLIST`.
 - H1 style: italic serif, oversized, editorial.
 - Background: dark liquid animated gradient using the provided `LiquidGradientCanvas` component.
-- CTA: `Connect Spotify` directly underneath the supporting hero line.
+- Primary CTA: `Start with Spotify` directly underneath the supporting hero line.
+- Secondary links: `Use ListenBrainz` and `Add YouTube links`.
 - Visual direction: dark, immersive, premium, music-product aesthetic inspired by Suno without copying Suno assets, text, or exact layout.
 
 The design should feel like a modern music discovery product, not a generic SaaS dashboard.
@@ -116,7 +191,7 @@ Do not build these unless explicitly requested later:
 - Scraping Discogs pages.
 - Importing every playlist automatically without user selection.
 - Large-scale background crawling.
-- Email notifications or price alerts.
+- Email notifications or automated price alerts. On-demand value snapshots and price-drop summaries are allowed; background price polling and alerting are not.
 - Public user profiles.
 - Prefixing every in-app product UI label/message with the user's name.
 
@@ -127,6 +202,13 @@ Important exception: Codex/agent responses to the user should intentionally star
 ## 7. Important API Constraints
 
 ### Spotify
+
+Spotify is the default beta source for allowlisted WAXLIST accounts. OAuth state
+and encrypted sessions must be bound to the signed-in Managed Neon Auth user.
+Existing unclaimed Spotify-linked data is recovered only through the safe,
+locked legacy-claim path; a new Spotify link binds to the current account.
+Current profile, playlist, saved-album, refresh, and match endpoints remain
+compatible.
 
 Use Spotify OAuth for user authorization.
 
@@ -151,9 +233,37 @@ Only request a scope if the MVP currently uses it.
 
 Spotify access tokens expire and must be refreshed server-side where applicable.
 
+### YouTube
+
+The beta accepts individual YouTube links only. URL normalization is server-side
+and must perform no outbound request. Accept `youtube.com/watch`, `youtu.be`,
+and Shorts URLs; canonicalize to video ID; deduplicate; and reject unsupported
+hosts, malformed input, and playlist URLs.
+
+Evidence must be labelled `YouTube link`. Never infer or claim that the user
+watched or listened to the video. Require user-confirmed artist and album
+metadata before Discogs matching. Provide `Open YouTube`; do not embed videos
+or store thumbnails initially.
+
+Future `watch_history` and `music_library` source types remain disabled. History
+ingestion is reserved for explicit Google Data Portability consent,
+asynchronous normalized processing, and immediate raw-archive deletion. Do not
+use the ordinary YouTube Data API for automatic music inference or combine its
+data with Discogs before a compliance review.
+
+Future history work must follow Google's current
+[`myactivity.youtube` schema](https://developers.google.com/data-portability/schema-reference/my_activity?hl=en)
+and [Data Portability workflow](https://developers.google.com/data-portability/user-guide/introduction?hl=en).
+Any proposal to combine ordinary YouTube API data with Discogs must first clear
+the [YouTube developer-policy boundary](https://developers.google.com/youtube/terms/developer-policies-guide).
+
 ### Discogs
 
 Use official Discogs API access only.
+
+Public use is limited to fresh CC0 catalogue fields and deep links. Marketplace
+pricing, images, sellers, collection/wantlist sync, and other Restricted Data
+are disabled by default and must not appear in the public interface.
 
 Discogs requests must include a unique `User-Agent` string.
 
@@ -219,11 +329,11 @@ Acceptance criteria:
 
 ### Vinyl Crate Results
 
-As a user, I want a simple list of recommended vinyl records to buy.
+As a user, I want a simple list of vinyl catalogue matches to review.
 
 Acceptance criteria:
 
-- Results are sorted by recommendation score.
+- Public beta results are sorted by match confidence.
 - Each result shows:
   - Spotify source album/track.
   - Discogs release/master title.
@@ -233,23 +343,26 @@ Acceptance criteria:
   - Match confidence.
   - Why it was recommended.
   - Discogs link where available.
-  - Marketplace availability where available.
+  - Native owned/wanted state and actions for reliable matches.
 - User can filter or sort by:
   - Confidence.
-  - Availability.
-  - Estimated price where available.
   - Artist.
   - Album.
+- Marketplace availability and estimated-price controls remain absent unless
+  Discogs Restricted Data is separately approved and enabled.
 
 ### Wishlist
 
-As a user, I want to save records I might buy later and manage them with practical buying rules.
+As a user, I want to mark records wanted without requiring Discogs Restricted
+Data.
 
 Acceptance criteria:
 
-- User can save a result to wishlist.
-- User can remove a result from wishlist.
-- Wishlist persists for the current user/session.
+- Reliable catalogue matches can be marked wanted in WAXLIST-native collection
+  state.
+- Wanted state persists to the authenticated WAXLIST user.
+- Legacy marketplace-oriented wishlist and buying controls remain
+  capability-gated until the Restricted Data boundary is separately approved.
 - Wishlist includes the Discogs ID/link and the Spotify source context.
 - User can assign priority, tags, notes, and optional price/shipping ceilings.
 - User can mark a listing/seller/relist pattern as ignored where marketplace data supports it.
@@ -260,7 +373,7 @@ As a connected user, I want WAXLIST to open into a persistent workspace rather t
 
 Acceptance criteria:
 
-- App shell includes durable navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- App shell includes durable navigation for Dashboard, Collection, Wantlist, Digging, and Insights/Health. Collection owns shelving and group organization; there is no separate Shelf page.
 - App shell includes global search or command input.
 - App shell shows sync/import status and clear reconnect or configuration actions.
 - Main content changes by workflow without losing navigation context.
@@ -288,7 +401,17 @@ Acceptance criteria:
 - User can search by artist, album/title, label, catalog number, barcode where available, year, tag, shelf location, and Discogs id.
 - Search should work from local cached data once imported.
 - User can filter owned, wanted, duplicates, recently added, high-value, and missing shelf-location records.
+- Collection leads with a carousel of favourited records plus the most and least expensive records that carry a recorded value, then the browse controls, then an `All vinyls` grid that starts collapsed and expands to every matching record.
+- The carousel keeps up to five favourited records and adds the two value extremes without displacing them. Wanted records stay eligible when they carry a value. It does not fall back to other unstarred records, compares values only inside the shelf's dominant recorded currency, and shows a prompt when nothing is starred or valued.
+- Browse controls filter the `All vinyls` grid only; the shelving groups and wantlist stay complete.
+- Every record on the `Wantlist` surface carries a visible heart-off control that takes the want off the list in one press, with no dialog and without opening the inspector. The same control does not appear on the browse grid, where wanted records mix with owned ones.
 - Record rows/cards show owned/wanted state, duplicate count, shelf location, estimated value/median price where available, and last sync status.
+- The record inspector shows the latest recorded value and its move from the previous observation, and lets the owner save a new value with a currency.
+- Saving a value records a dated snapshot; the Dashboard total, trend, and price movements are derived only from those snapshots.
+- A Discogs marketplace refresh is on-demand, bounded per run, and capability-gated. It never becomes a scraper or a background poller.
+- The record inspector can fetch one release's lowest Discogs marketplace price in the record's current currency and store it as a dated observation. The Dashboard refresh prices only the stalest records, owned and wanted, up to its bounded limit.
+- The Dashboard price overview groups every valued vinyl into price drops, unchanged prices, and price increases, and each vinyl's current-value blip links to its Discogs marketplace page.
+- Discogs returns the lowest listing in the requested currency; the app must not assume the API's default currency.
 
 ### Digging Mode
 
@@ -307,7 +430,7 @@ As a collector, I want to know exactly where a record is stored.
 
 Acceptance criteria:
 
-- User can assign location fields such as room, unit, shelf, slot, and freeform notes.
+- User can assign location fields such as group, unit, shelf, slot, and freeform notes. The stored field is named `group`.
 - Location can be edited from collection browser, record inspector, and digging mode.
 - User can filter/sort by missing location and by location hierarchy.
 
@@ -400,18 +523,19 @@ A result below the automatic threshold may still be shown in a separate “possi
 Purpose:
 
 - Explain the product quickly.
-- Prompt user to connect Spotify.
+- Prompt user to create or sign in to a WAXLIST account.
 - Establish the WAXLIST visual identity.
 
 Must include exactly as specified in `DESIGN.md`:
 
 - Liquid gradient background.
-- Eyebrow: `Spotify-powered vinyl discovery`.
+- Eyebrow: `Listening history, reconciled for collectors`.
 - H1: `WAXLIST`.
 - H1 style: italic serif.
-- Supporting line: `Turn your Spotify taste into a vinyl crate worth collecting.`
-- Primary CTA: `Connect Spotify`.
-- Privacy reassurance: `We only use your Spotify data to build your crate. You can disconnect anytime.`
+- Supporting line: `Turn albums on your radar into a reviewable crate of what you own, want, and are still missing.`
+- Primary CTA: `Start with Spotify`.
+- Secondary links: `Use ListenBrainz` and `Add YouTube links`.
+- Privacy reassurance: `Invite-only beta. Your WAXLIST email/password account stays separate from connected music sources.`
 
 ### Spotify Import
 
@@ -434,7 +558,7 @@ Purpose:
 
 Must include:
 
-- Left or top navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- Left or top navigation for Dashboard, Collection, Wantlist, Digging, and Insights/Health. Collection includes the shelving and group organization surface.
 - Global search or command input.
 - Sync/import status.
 - Main workspace region.
@@ -455,6 +579,8 @@ Must include:
 - Duplicate warnings.
 - Priority wantlist items or watch rules.
 - Shortcuts to Digging mode and Collection search.
+- Price overview: a total in the dominant recorded currency across every valued vinyl, a movement graph with drops, unchanged prices, and increases, a dated total trend when the history allows it, and a Discogs buy link on each vinyl's current-value blip.
+- A clear value empty state that explains how to record a value from the record inspector.
 
 ### Collection Browser
 
@@ -505,11 +631,13 @@ Must include:
 
 Purpose:
 
-- Locate physical records.
+- Locate physical records from the merged Collection page rather than a separate Shelf page.
 
 Must include:
 
-- Room/unit/shelf/slot fields.
+- Group/unit/shelf/slot fields.
+- A group-level grid with one plus action to create a group or add records to it.
+- Group-only grouping plus optional shelf detail; records without a group appear under `Unsorted`.
 - Missing-location filter.
 - Location edit action.
 
@@ -591,7 +719,6 @@ src/
       collection/page.tsx
       wantlist/page.tsx
       digging/page.tsx
-      shelf/page.tsx
       insights/page.tsx
     wishlist/page.tsx
     api/
@@ -663,6 +790,18 @@ src/
 - `created_at`
 - `updated_at`
 
+### listening_source_snapshots
+
+- `id`
+- `user_id`
+- `provider`
+- `source_type`
+- `source_id`
+- `summary`
+- `created_at`
+- `updated_at`
+- Unique key: (`user_id`, `provider`, `source_type`)
+
 ### imported_playlists
 
 - `id`
@@ -729,7 +868,7 @@ src/
 - `want_status`
 - `tags`
 - `notes`
-- `room`
+- `group`
 - `unit`
 - `shelf`
 - `slot`
@@ -774,6 +913,12 @@ GET  /api/spotify/callback
 POST /api/spotify/logout
 GET  /api/spotify/playlists
 GET  /api/spotify/playlists/:id/tracks
+GET  /api/listening/listenbrainz/import
+POST /api/listening/listenbrainz/import
+GET  /api/listening/youtube/links
+POST /api/listening/youtube/links
+GET  /api/listening/youtube/watch-history (disabled)
+POST /api/listening/youtube/watch-history (disabled)
 POST /api/crate/generate
 GET  /api/crate/:id
 POST /api/collection/import
@@ -853,29 +998,50 @@ Bad in-app UI examples:
 The MVP is successful when a user can:
 
 1. Open the app.
-2. Connect Spotify.
-3. Select a playlist.
-4. Generate vinyl suggestions.
-5. View Discogs matches with confidence scores.
-6. Open a Discogs link for a recommended record.
-7. Save at least one record to wishlist.
-8. Return to wishlist later in the same account/session.
+2. Create an allowlisted email/password WAXLIST account.
+3. Start with Spotify, or select ListenBrainz or YouTube from the Crate.
+4. Complete one supported source intake flow.
+5. Review or confirm ambiguous album evidence.
+6. View Discogs catalogue matches with confidence scores.
+7. See owned, wanted, missing, review, and unmatched classifications.
+8. Mark at least one record owned or wanted.
+9. Return to each provider/source-type snapshot and native collection state.
 
 ## 21. Manual QA Checklist
 
-- Spotify OAuth works.
-- Spotify OAuth failure is handled.
-- Playlist list loads.
-- Empty playlist is handled.
-- Playlist with 100+ tracks does not spam Discogs.
+- Managed Neon Auth sign-up and sign-in work.
+- Non-allowlisted production sign-up fails closed.
+- Authentication failure is handled.
+- Spotify connect, refresh, playlist import, and saved-album import work for an
+  allowlisted account.
+- ListenBrainz import loads.
+- Empty listening history is handled.
+- Imports never review more than 500 listens or return more than 100 albums.
 - Discogs search works with user-agent header.
 - Discogs rate limit headers are read/logged safely.
-- Results are cached.
+- Public catalogue results are cached for no more than one hour.
 - Weak matches are not shown as strong matches.
-- Wishlist add/remove works.
+- Native owned/wanted updates work.
+- YouTube watch/Shorts links canonicalize and deduplicate without a network request.
+- YouTube playlists show `Playlist import is coming later`.
+- YouTube artist/album confirmation is required before matching.
+- YouTube link evidence is never described as watch history.
+- Future YouTube history and music-library capabilities fail closed.
+- Restricted routes fail closed and restricted surfaces are absent.
 - Secrets are not exposed to client bundle.
 - App works on mobile viewport.
 - External links open safely.
+- With pressing proof explicitly enabled, test a unique, shared-identifier, and
+  catalogue-incomplete copy.
+- Confirm a shared barcode never produces `exact` by itself.
+- Confirm camera success and denied-permission manual fallback on iOS Safari
+  and Android Chrome.
+- Confirm an anonymous visitor can iterate within one family but cannot start a
+  second family or save.
+- Confirm authenticated save/resume re-fetches catalogue metadata and overlays
+  only the current user's native collection state.
+- Confirm privacy deletion removes pressing investigations through the
+  account-owned cascade.
 ## Agent Continuity Requirement
 
 Codex/agent work must maintain a canonical living handoff file at:

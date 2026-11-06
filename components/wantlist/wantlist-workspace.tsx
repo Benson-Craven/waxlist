@@ -27,7 +27,9 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Collapse } from "@/components/ui/collapse";
 import { Input } from "@/components/ui/input";
+import { LabelBadge } from "@/components/ui/label-badge";
 import { SellerScoutWorkspace } from "@/components/wantlist/seller-scout-workspace";
 import { SmartWantsWorkspace } from "@/components/wantlist/smart-wants-panel";
 import {
@@ -129,8 +131,8 @@ function buildSearchText(record: WishlistRecord) {
   return [
     record.discogsTitle,
     record.discogsArtist,
-    record.spotifyAlbum,
-    record.spotifyArtist,
+    record.sourceAlbum,
+    record.sourceArtist,
     record.country,
     record.year,
     record.priceLabel,
@@ -223,25 +225,25 @@ function BuyingSignals({
   const listingCount = parseListingCount(record);
 
   return (
-    <div className="grid gap-2 text-xs text-[#FFF4E8]/56 sm:grid-cols-2 lg:grid-cols-4">
-      <span className="flex items-center gap-2 rounded-full bg-[#1b1b20] px-3 py-2">
-        <TrendingDown className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
+    <div className="flex flex-wrap gap-2 text-xs text-[#FFF4E8]/56">
+      <LabelBadge size="lg" tone="quiet">
+        <TrendingDown className="size-3.5" aria-hidden="true" />
         Price drop pending
-      </span>
-      <span className="flex items-center gap-2 rounded-full bg-[#1b1b20] px-3 py-2">
-        <Boxes className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
+      </LabelBadge>
+      <LabelBadge size="lg" tone="quiet">
+        <Boxes className="size-3.5" aria-hidden="true" />
         {listingCount ? `${listingCount} listed` : record.availabilityLabel}
-      </span>
-      <span className="flex items-center gap-2 rounded-full bg-[#1b1b20] px-3 py-2">
-        <BadgeCheck className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
+      </LabelBadge>
+      <LabelBadge size="lg" tone="quiet">
+        <BadgeCheck className="size-3.5" aria-hidden="true" />
         Seller not checked
-      </span>
-      <span className="flex items-center gap-2 rounded-full bg-[#1b1b20] px-3 py-2">
-        <PackagePlus className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
+      </LabelBadge>
+      <LabelBadge size="lg" tone="quiet">
+        <PackagePlus className="size-3.5" aria-hidden="true" />
         {sameArtistWantCount > 1
           ? `${sameArtistWantCount} same-artist wants`
           : "No seller evidence"}
-      </span>
+      </LabelBadge>
     </div>
   );
 }
@@ -252,42 +254,51 @@ function BuyingControlSummary({ record }: { record: WishlistRecord }) {
 
   return (
     <div className="mt-3 flex flex-wrap gap-2 text-xs text-[#FFF4E8]/56">
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#211b24] px-3 py-1.5">
-        <SlidersHorizontal className="size-3.5 text-[#F08A4B]/72" aria-hidden="true" />
+      <LabelBadge size="lg">
+        <SlidersHorizontal
+          className="size-3.5 text-[#FFF4E8]/45"
+          aria-hidden="true"
+        />
         {formatPriorityLabel(controls.priority)}
-      </span>
+      </LabelBadge>
       {controls.maxItemPrice ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#211b24] px-3 py-1.5">
-          <DollarSign className="size-3.5 text-[#F08A4B]/72" aria-hidden="true" />
+        <LabelBadge size="lg">
+          <DollarSign
+            className="size-3.5 text-[#FFF4E8]/45"
+            aria-hidden="true"
+          />
           Item &lt;= {controls.maxItemPrice}
-        </span>
+        </LabelBadge>
       ) : null}
       {controls.maxShipping ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#211b24] px-3 py-1.5">
-          <Truck className="size-3.5 text-[#F08A4B]/72" aria-hidden="true" />
+        <LabelBadge size="lg">
+          <Truck
+            className="size-3.5 text-[#FFF4E8]/45"
+            aria-hidden="true"
+          />
           Ship &lt;= {controls.maxShipping}
-        </span>
+        </LabelBadge>
       ) : null}
       {controls.regionFilter ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#211b24] px-3 py-1.5">
-          <MapPin className="size-3.5 text-[#F08A4B]/72" aria-hidden="true" />
+        <LabelBadge size="lg">
+          <MapPin
+            className="size-3.5 text-[#FFF4E8]/45"
+            aria-hidden="true"
+          />
           {controls.regionFilter}
-        </span>
+        </LabelBadge>
       ) : null}
       {controls.ignoredListingState !== "none" ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#351a24] px-3 py-1.5 text-[#FFF4E8]/68">
-          <Ban className="size-3.5 text-[#D34278]/82" aria-hidden="true" />
+        <LabelBadge size="lg" tone="quiet">
+          <Ban className="size-3.5 text-[#FFF4E8]/42" aria-hidden="true" />
           {formatIgnoredStateLabel(controls.ignoredListingState)}
-        </span>
+        </LabelBadge>
       ) : null}
       {tags.map((tag) => (
-        <span
-          key={tag}
-          className="inline-flex items-center gap-1.5 rounded-full bg-[#211b24] px-3 py-1.5"
-        >
-          <Tag className="size-3.5 text-[#F08A4B]/72" aria-hidden="true" />
+        <LabelBadge key={tag} size="lg">
+          <Tag className="size-3.5 text-[#FFF4E8]/45" aria-hidden="true" />
           {tag}
-        </span>
+        </LabelBadge>
       ))}
     </div>
   );
@@ -375,8 +386,8 @@ function BuyingControlsEditor({
             Buying controls
           </p>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-[#FFF4E8]/44">
-            Seller and region filters apply when listing data is available from
-            supported Discogs marketplace payloads.
+            Seller and region filters apply once Discogs listing data is
+            available.
           </p>
         </div>
         <Button
@@ -634,14 +645,15 @@ function WantlistList({
                     Inspect
                   </Button>
                 </div>
-                {isControlsOpen ? (
-                  <div id={`buying-controls-${record.id}`}>
-                    <BuyingControlsEditor
-                      record={record}
-                      onSave={onSaveRecord}
-                    />
-                  </div>
-                ) : null}
+                <Collapse
+                  open={isControlsOpen}
+                  id={`buying-controls-${record.id}`}
+                >
+                  <BuyingControlsEditor
+                    record={record}
+                    onSave={onSaveRecord}
+                  />
+                </Collapse>
               </div>
             </div>
 
@@ -755,12 +767,12 @@ function EmptyWantlist({
       <div>
         <Heart className="mx-auto size-8 text-[#FFF4E8]/26" aria-hidden="true" />
         <p className="mt-5 text-sm font-medium text-[#FFF4E8]/68">
-          {hasRecords ? "No wanted records found" : "No wanted vinyl saved yet"}
+          {hasRecords ? "No matches" : "Nothing on the wantlist yet"}
         </p>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/42">
           {hasRecords
-            ? "Adjust search or filters to find a saved record."
-            : "Save records from the Crate workflow to populate buying signals here."}
+            ? "Try another search or clear the filters."
+            : "Save a record from the crate and it lands here."}
         </p>
         {hasRecords ? (
           <Button

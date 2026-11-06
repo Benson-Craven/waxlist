@@ -1,7 +1,17 @@
 import Link from "next/link";
 import { APP_NAME } from "@/lib/constants";
 
-export default function DataDeletionPage() {
+type DataDeletionPageProps = {
+  searchParams: Promise<{
+    error?: string;
+  }>;
+};
+
+export default async function DataDeletionPage({
+  searchParams,
+}: DataDeletionPageProps) {
+  const { error } = await searchParams;
+
   return (
     <main className="min-h-screen bg-[#05030A] px-6 py-12 text-[#FFF4E8] sm:py-16">
       <div className="mx-auto max-w-3xl">
@@ -20,22 +30,29 @@ export default function DataDeletionPage() {
             Delete WAXLIST Data
           </h1>
           <p className="mt-5 text-sm leading-7 text-[#FFF4E8]/70">
-            This deletes data WAXLIST controls for the current connected Spotify
-            user, or fallback wishlist data tied to this browser session. It
-            also clears WAXLIST session cookies.
+            This deletes what WAXLIST controls for your signed-in account and
+            clears your WAXLIST session cookies.
           </p>
         </header>
 
         <section className="mt-10 space-y-4 text-sm leading-7 text-[#FFF4E8]/72">
+          {error === "auth_identity" ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-[#F08A4B]/24 bg-[#F08A4B]/9 p-4 text-[#FFE1C7]"
+            >
+              Your data is gone, but the sign-in identity wasn’t removed.
+              Contact support before signing in again.
+            </div>
+          ) : null}
           <p>
-            Deleted database records include your WAXLIST user row, Spotify
-            import summaries, Discogs match rows created from those imports, and
-            wishlist items. Shared provider cache rows may expire separately and
-            are not used as account records.
+            That covers your user row, listening snapshots, catalogue matches,
+            pressing investigations, collection and wantlist state, import runs,
+            and linked credentials.
           </p>
           <p>
-            This action does not revoke WAXLIST inside Spotify. To revoke access
-            at Spotify, remove WAXLIST from your Spotify account Apps page.
+            Shared provider cache rows aren’t account data and expire on their
+            own. Public Discogs catalogue entries expire within an hour.
           </p>
         </section>
 
@@ -55,14 +72,6 @@ export default function DataDeletionPage() {
           >
             Privacy policy
           </Link>
-          <a
-            href="https://www.spotify.com/account/apps/"
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-full border border-white/15 px-5 py-3 text-sm font-semibold text-[#FFF4E8] transition hover:bg-white/10"
-          >
-            Spotify connected apps
-          </a>
         </div>
       </div>
     </main>

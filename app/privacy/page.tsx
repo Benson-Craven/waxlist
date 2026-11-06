@@ -4,23 +4,27 @@ import { APP_NAME } from "@/lib/constants";
 const policySections = [
   {
     title: "What WAXLIST Collects",
-    body: "WAXLIST requests the minimum Spotify access needed for the MVP: private and collaborative playlist reads and saved album reads. The app uses your Spotify user id, display name, image, country, product tier, playlists, saved albums, track metadata, and album metadata to build vinyl recommendations. WAXLIST does not return your Spotify email address to the browser.",
+    body: "Your Managed Neon Auth account, plus the sources you connect: Spotify playlists and saved albums, public ListenBrainz listens, YouTube links you paste, and pressing evidence you enter.",
   },
   {
     title: "How Data Is Used",
-    body: "Spotify data is used to create album search units, query Discogs server-side, rank vinyl matches, and explain why a record was recommended. Discogs requests use server-side credentials and a configured User-Agent. Provider tokens and secrets are never exposed to client-side React code.",
+    body: "WAXLIST turns albums into search units, matches them to Discogs releases server-side, and compares them with what you own or want. Provider tokens never reach the browser.",
   },
   {
     title: "What WAXLIST Stores",
-    body: "WAXLIST stores encrypted Spotify session cookies in the browser, API cache rows for Spotify and Discogs responses, and wishlist records in the configured database. When you are connected to Spotify, wishlist items are associated with your Spotify user id. If Spotify is unavailable, wishlist items may be associated with a hashed fallback session cookie.",
+    body: "Your collection and wantlist state, the latest successful snapshot per source, saved pressing evidence, and candidate IDs. Raw ListenBrainz responses aren't kept, YouTube links aren't fetched, and public Discogs cache entries expire within an hour. Pressing searches leave out images, marketplace, seller, collection, wantlist, and Discogs user data.",
   },
   {
-    title: "Logout And Revocation",
-    body: "Signing out clears WAXLIST's local Spotify session and OAuth state cookies. It does not revoke WAXLIST from your Spotify account. To revoke access at Spotify, open your Spotify account Apps page and remove WAXLIST from connected apps.",
+    title: "Anonymous Pressing Preview",
+    body: "With the pressing-proof beta on, you can check one investigation for 24 hours. A signed cookie ties the preview to one release family, and hashed network addresses are used only for abuse limits. Saving or resuming needs an account.",
+  },
+  {
+    title: "Spotify Connection",
+    body: "Spotify links to a signed-in WAXLIST account. OAuth state and encrypted sessions are account-bound, and a matching unclaimed legacy account is claimed under a lock or not at all.",
   },
   {
     title: "Data Deletion",
-    body: "Use the data deletion page to delete the current connected user's database-backed profile, imports, matches, and wishlist records, or to delete the fallback-session wishlist records for this browser. It also clears local WAXLIST session cookies.",
+    body: "The deletion page removes your account data, listening snapshots, catalogue matches, pressing investigations, collection and wantlist state, linked credentials, and session cookies.",
   },
 ];
 
@@ -43,8 +47,9 @@ export default function PrivacyPage() {
             Privacy Policy
           </h1>
           <p className="mt-5 text-sm leading-7 text-[#FFF4E8]/70">
-            Last updated: June 30, 2026. This MVP is designed to use Spotify and
-            Discogs data only to build your vinyl crate.
+            Last updated: July 30, 2026. The invite-only beta builds a crate
+            from Spotify, ListenBrainz, or links you supply, matched against
+            Discogs catalogue data.
           </p>
         </header>
 
@@ -66,14 +71,6 @@ export default function PrivacyPage() {
           >
             Data deletion
           </Link>
-          <a
-            href="https://www.spotify.com/account/apps/"
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-full border border-white/15 px-5 py-3 text-sm font-semibold text-[#FFF4E8] transition hover:bg-white/10"
-          >
-            Spotify connected apps
-          </a>
         </div>
       </div>
     </main>

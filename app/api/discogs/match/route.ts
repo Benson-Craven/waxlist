@@ -1,17 +1,36 @@
+import { createHash, randomUUID } from "node:crypto";
+import { NextResponse, type NextRequest } from "next/server";
+
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { requireServerCapability } from "@/lib/capabilities/server";
+import { listCollectionRecords } from "@/lib/collection/server";
 import {
   getApiCacheEnv,
   getDiscogsEnv,
   getDiscogsMatchSecurityEnv,
+  getNeonAuthEnv,
 } from "@/lib/config";
 import {
-  DiscogsApiError,
-  getDiscogsMarketplaceStats,
-  searchDiscogsForUnit,
-  type DiscogsMarketplaceStats,
-  type DiscogsRateLimit,
-  type StructuredDiscogsError,
-} from "@/lib/discogs/client";
-import { rankDiscogsSearchResult } from "@/lib/matching/match-discogs-release";
+  DiscogsCatalogueError,
+  searchDiscogsCatalogue,
+  type DiscogsCatalogueRateLimit,
+} from "@/lib/discogs/catalogue-client";
+import { classifyCollectionGap } from "@/lib/listening/collection-gap";
+import { createCollectionMarkToken } from "@/lib/listening/mark-token";
+import { loadLatestListeningSnapshot } from "@/lib/listening/server";
+import type {
+  ListeningAlbumCandidate,
+  ListeningSourceProvider,
+  ListeningSourceType,
+} from "@/lib/listening/types";
+import {
+  createDiscogsSearchUnitFromListeningCandidate,
+  type DiscogsSearchUnit,
+} from "@/lib/matching/discogs-search-units";
+import {
+  rankDiscogsSearchResult,
+  RELIABLE_MATCH_CONFIDENCE,
+} from "@/lib/matching/match-discogs-release";
 import { writeAuditLog } from "@/lib/security/audit-log";
 import { readLimitedJsonRequest } from "@/lib/security/limited-json";
 import { checkRateLimit } from "@/lib/security/rate-limit";
@@ -19,37 +38,117 @@ import {
   copyCookieHeaders,
   getSpotifyAuthorizedRequest,
 } from "@/lib/spotify/api";
-import { getSpotifyCookieNames } from "@/lib/spotify/oauth";
-import type { DiscogsSearchUnit } from "@/lib/matching/discogs-search-units";
-import { createHash, randomUUID } from "node:crypto";
-import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-
-type MatchRequestBody = {
-  searchUnits?: DiscogsSearchUnit[];
-};
 
 const MAX_SEARCH_UNITS = 100;
 const MATCH_ROUTE = "/api/discogs/match";
 
-type MatchFailure = {
-  searchUnit: DiscogsSearchUnit;
-  error: StructuredDiscogsError;
+type MatchRequestBody = {
+  candidates?: unknown;
+  provider?: unknown;
+  sourceType?: unknown;
+  searchUnits?: unknown;
 };
 
-function emptyRateLimit(): DiscogsRateLimit {
-  return {
-    limit: null,
-    used: null,
-    remaining: null,
-  };
+function stableHash(value: string) {
+  return createHash("sha256").update(value).digest("base64url").slice(0, 16);
+}
+
+type CandidateEdit = {
+  id: string;
+  artist: string;
+  album: string;
+};
+
+type MatchSourceCandidate = Pick<
+  ListeningAlbumCandidate,
+  "artist" | "album" | "metadataQuality"
+>;
+
+function isSearchUnit(value: unknown): value is DiscogsSearchUnit {
+  if (!value || typeof value !== "object") return false;
+  const unit = value as Partial<DiscogsSearchUnit>;
+
+  return (
+    typeof unit.id === "string" &&
+    typeof unit.album === "string" &&
+    typeof unit.artist === "string" &&
+    typeof unit.normalizedAlbum === "string" &&
+    typeof unit.normalizedArtist === "string" &&
+    typeof unit.query === "string" &&
+    typeof unit.sourceTrackCount === "number" &&
+    Array.isArray(unit.sourceTrackNames) &&
+    unit.source?.provider === "spotify"
+  );
+}
+
+function readListeningSource(body: MatchRequestBody | null): {
+  provider: ListeningSourceProvider;
+  sourceType: ListeningSourceType;
+} | null {
+  const provider = body?.provider ?? "listenbrainz";
+  const sourceType = body?.sourceType ?? "listening_history";
+
+  if (provider === "listenbrainz" && sourceType === "listening_history") {
+    return { provider, sourceType };
+  }
+
+  if (provider === "youtube" && sourceType === "video_links") {
+    return { provider, sourceType };
+  }
+
+  return null;
+}
+
+function readCandidateEdits(value: unknown): CandidateEdit[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const edits: CandidateEdit[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      return null;
+    }
+
+    const candidate = item as Record<string, unknown>;
+
+    if (
+      typeof candidate.id !== "string" ||
+      typeof candidate.artist !== "string" ||
+      typeof candidate.album !== "string"
+    ) {
+      return null;
+    }
+
+    edits.push({
+      id: candidate.id,
+      artist: candidate.artist.trim(),
+      album: candidate.album.trim(),
+    });
+  }
+
+  return edits;
+}
+
+function clientIp(request: NextRequest) {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    null
+  );
+}
+
+function emptyRateLimit(): DiscogsCatalogueRateLimit {
+  return { limit: null, used: null, remaining: null };
 }
 
 function mergeRateLimit(
-  current: DiscogsRateLimit,
-  next: DiscogsRateLimit,
-): DiscogsRateLimit {
+  current: DiscogsCatalogueRateLimit,
+  next: DiscogsCatalogueRateLimit,
+) {
   return {
     limit: next.limit ?? current.limit,
     used: next.used ?? current.used,
@@ -62,454 +161,465 @@ function mergeRateLimit(
   };
 }
 
-function createFallbackDiscogsError(error: unknown): StructuredDiscogsError {
-  return {
-    code: "discogs_provider_error",
-    message:
-      error instanceof Error
-        ? error.message
-        : "Discogs matching could not be completed for this album.",
-    status: 0,
-    retryAfterSeconds: null,
-    rateLimit: emptyRateLimit(),
-    providerMessage: null,
-  };
-}
-
-function isSearchUnit(value: unknown): value is DiscogsSearchUnit {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const unit = value as Partial<DiscogsSearchUnit>;
-
-  return (
-    typeof unit.id === "string" &&
-    typeof unit.album === "string" &&
-    typeof unit.artist === "string" &&
-    typeof unit.normalizedAlbum === "string" &&
-    typeof unit.normalizedArtist === "string" &&
-    typeof unit.query === "string" &&
-    typeof unit.sourceTrackCount === "number" &&
-    Array.isArray(unit.sourceTrackNames)
-  );
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function createStableHash(value: string) {
-  return createHash("sha256").update(value).digest("base64url").slice(0, 16);
-}
-
-function getClientIp(request: NextRequest) {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-
-  if (forwardedFor) {
-    return forwardedFor.split(",")[0]?.trim() ?? null;
-  }
-
-  return (
-    request.headers.get("x-real-ip") ??
-    request.headers.get("cf-connecting-ip") ??
-    null
-  );
-}
-
-function jsonResponse(
-  payload: Record<string, unknown>,
-  status: number,
-  cookieResponse?: NextResponse,
-  headers?: HeadersInit,
-) {
-  const response = NextResponse.json(payload, {
-    status,
-    headers,
-  });
-
-  copyCookieHeaders(cookieResponse, response);
-
-  return response;
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export async function POST(request: NextRequest) {
   const requestId = randomUUID();
-  const ip = getClientIp(request);
-  const ipId = ip ? createStableHash(ip) : undefined;
+  const resolved = await resolveAuthenticatedOwner();
 
-  if (!request.cookies.has(getSpotifyCookieNames().session)) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 401,
-      ipId,
-      reason: "unauthenticated",
-    });
-
-    return jsonResponse(
+  if (!resolved.ok) {
+    return NextResponse.json(
       {
         error: {
-          code: "spotify_not_connected",
-          message: "Connect Spotify before matching records on Discogs.",
+          code: resolved.code,
+          message: resolved.message,
         },
       },
-      401,
+      { status: resolved.code === "auth_required" ? 401 : 500 },
     );
   }
 
-  const authorized = await getSpotifyAuthorizedRequest(request);
+  const capability = requireServerCapability("discogsCatalogue");
 
-  if (!authorized.ok) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: authorized.response.status,
-      ipId,
-      reason: "unauthenticated",
-    });
-
-    return authorized.response;
+  if (!capability.ok) {
+    return NextResponse.json({ error: capability.error }, { status: 404 });
   }
 
-  const subjectId = createStableHash(
-    authorized.session.refreshToken ?? authorized.session.accessToken,
-  );
-  const securityEnv = getDiscogsMatchSecurityEnv();
+  const security = getDiscogsMatchSecurityEnv();
+  const discogs = getDiscogsEnv();
+  const cache = getApiCacheEnv();
+  const auth = getNeonAuthEnv();
 
-  if (!securityEnv.ok) {
-    writeAuditLog("error", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 500,
-      subjectId,
-      ipId,
-      reason: "security_configuration_error",
-    });
+  if (!security.ok || !discogs.ok || !cache.ok || !auth.ok) {
+    const failed:
+      | { ok: false; message: string; missing: string[] }
+      | undefined = !security.ok
+      ? security
+      : !discogs.ok
+        ? discogs
+        : !cache.ok
+          ? cache
+          : !auth.ok
+            ? auth
+          : undefined;
 
-    return jsonResponse(
-      {
-        error: {
-          code: "discogs_match_security_configuration_error",
-          message: securityEnv.message,
-          missing: securityEnv.missing,
-        },
-      },
-      500,
-      authorized.response,
-    );
-  }
-
-  const requestRateLimit = checkRateLimit({
-    key: `discogs-match:${subjectId}:${ipId ?? "unknown-ip"}`,
-    limit: securityEnv.rateLimitMaxRequests,
-    windowMs: securityEnv.rateLimitWindowMs,
-  });
-
-  if (!requestRateLimit.ok) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 429,
-      subjectId,
-      ipId,
-      reason: "rate_limited",
-      details: {
-        limit: requestRateLimit.limit,
-        retryAfterSeconds: requestRateLimit.retryAfterSeconds,
-      },
-    });
-
-    return jsonResponse(
-      {
-        error: {
-          code: "discogs_match_rate_limited",
-          message: "Too many Discogs match requests. Please wait and retry.",
-          retryAfterSeconds: requestRateLimit.retryAfterSeconds,
-        },
-      },
-      429,
-      authorized.response,
-      {
-        "Retry-After": String(requestRateLimit.retryAfterSeconds),
-        "X-RateLimit-Limit": String(requestRateLimit.limit),
-        "X-RateLimit-Remaining": "0",
-        "X-RateLimit-Reset": String(
-          Math.ceil(requestRateLimit.resetAt / 1000),
-        ),
-      },
-    );
-  }
-
-  const env = getDiscogsEnv();
-  const cacheEnv = getApiCacheEnv();
-
-  if (!env.ok) {
-    writeAuditLog("error", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 500,
-      subjectId,
-      ipId,
-      reason: "discogs_configuration_error",
-    });
-
-    return jsonResponse(
+    if (!failed) {
+      throw new Error("Discogs configuration narrowing failed.");
+    }
+    return NextResponse.json(
       {
         error: {
           code: "discogs_configuration_error",
-          message: env.message,
-          missing: env.missing,
+          message: failed.message,
+          missing: failed.missing,
         },
       },
-      500,
-      authorized.response,
+      { status: 500 },
     );
   }
 
-  if (!cacheEnv.ok) {
-    writeAuditLog("error", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 500,
-      subjectId,
-      ipId,
-      reason: "cache_configuration_error",
-    });
+  const ip = clientIp(request);
+  const rate = checkRateLimit({
+    key: `discogs-match:${stableHash(resolved.owner.userId)}:${ip ? stableHash(ip) : "unknown"}`,
+    limit: security.rateLimitMaxRequests,
+    windowMs: security.rateLimitWindowMs,
+  });
 
-    return jsonResponse(
+  if (!rate.ok) {
+    return NextResponse.json(
       {
         error: {
-          code: "cache_configuration_error",
-          message: cacheEnv.message,
-          missing: cacheEnv.missing,
+          code: "discogs_match_rate_limited",
+          message: "Too many catalogue match requests. Please wait and retry.",
+          retryAfterSeconds: rate.retryAfterSeconds,
         },
       },
-      500,
-      authorized.response,
+      {
+        status: 429,
+        headers: { "Retry-After": String(rate.retryAfterSeconds) },
+      },
     );
   }
 
   const bodyResult = await readLimitedJsonRequest(
     request,
-    securityEnv.maxBodyBytes,
+    security.maxBodyBytes,
   );
 
   if (!bodyResult.ok) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: bodyResult.status,
-      subjectId,
-      ipId,
-      reason: bodyResult.code,
-      details: {
-        bytesRead: bodyResult.bytesRead,
-        maxBodyBytes: securityEnv.maxBodyBytes,
-      },
-    });
-
-    return jsonResponse(
+    return NextResponse.json(
       {
         error: {
           code: bodyResult.code,
           message: bodyResult.message,
         },
       },
-      bodyResult.status,
-      authorized.response,
+      { status: bodyResult.status },
     );
   }
 
   const body = bodyResult.value as MatchRequestBody | null;
-  const searchUnits = body?.searchUnits;
+  const spotifySearchUnits = Array.isArray(body?.searchUnits)
+    ? body.searchUnits
+    : null;
+  const isSpotifyRequest = spotifySearchUnits !== null;
+  let spotifyCookieResponse: NextResponse | undefined;
+  const candidates: ListeningAlbumCandidate[] = [];
+  const sourceCandidateById = new Map<string, MatchSourceCandidate>();
+  let searchUnits: DiscogsSearchUnit[];
 
-  if (!Array.isArray(searchUnits) || searchUnits.length === 0) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 400,
-      subjectId,
-      ipId,
-      reason: "missing_search_units",
-      details: {
-        bytesRead: bodyResult.bytesRead,
-      },
-    });
+  if (isSpotifyRequest) {
+    const capability = requireServerCapability("spotifyImport");
 
-    return jsonResponse(
-      {
-        error: {
-          code: "missing_search_units",
-          message: "At least one normalized album search unit is required.",
-        },
-      },
-      400,
-      authorized.response,
-    );
-  }
-
-  const validSearchUnits = searchUnits.filter(isSearchUnit);
-
-  if (validSearchUnits.length !== searchUnits.length) {
-    writeAuditLog("warn", {
-      event: "discogs_match_denied",
-      requestId,
-      route: MATCH_ROUTE,
-      status: 400,
-      subjectId,
-      ipId,
-      reason: "invalid_search_units",
-      details: {
-        requestedUnits: searchUnits.length,
-        validUnits: validSearchUnits.length,
-      },
-    });
-
-    return jsonResponse(
-      {
-        error: {
-          code: "invalid_search_units",
-          message: "Every Discogs search unit must include album and artist metadata.",
-        },
-      },
-      400,
-      authorized.response,
-    );
-  }
-
-  const cappedSearchUnits = validSearchUnits.slice(0, MAX_SEARCH_UNITS);
-  const results = [];
-  const failures: MatchFailure[] = [];
-  let rateLimit = emptyRateLimit();
-  let stoppedForRateLimit = false;
-  let attemptedUnits = 0;
-
-  for (const [index, unit] of cappedSearchUnits.entries()) {
-    attemptedUnits += 1;
-
-    if (index > 0) {
-      await wait(env.requestDelayMs);
+    if (!capability.ok) {
+      return NextResponse.json({ error: capability.error }, { status: 404 });
     }
 
-    try {
-      const searchResult = await searchDiscogsForUnit({
-        unit,
-        token: env.token,
-        userAgent: env.userAgent,
-        cacheTtlMs: cacheEnv.ttlMs,
+    if (
+      spotifySearchUnits.length === 0 ||
+      spotifySearchUnits.length > MAX_SEARCH_UNITS ||
+      spotifySearchUnits.some((unit) => !isSearchUnit(unit)) ||
+      new Set(
+        spotifySearchUnits.map((unit) => (unit as DiscogsSearchUnit).id),
+      ).size !== spotifySearchUnits.length
+    ) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "invalid_search_units",
+            message:
+              "Provide between one and 100 unique Spotify album search units.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+
+    const spotify = await getSpotifyAuthorizedRequest(
+      request,
+      resolved.owner.authUserId,
+    );
+
+    if (!spotify.ok) {
+      return spotify.response;
+    }
+
+    spotifyCookieResponse = spotify.response;
+    searchUnits = spotifySearchUnits as DiscogsSearchUnit[];
+    for (const unit of searchUnits) {
+      sourceCandidateById.set(unit.id, {
+        artist: unit.artist,
+        album: unit.album,
+        metadataQuality: "complete",
       });
-      rateLimit = mergeRateLimit(rateLimit, searchResult.rateLimit);
-      const preliminaryResult = rankDiscogsSearchResult(searchResult);
-      const marketplaceStatsByReleaseId = new Map<
-        number,
-        DiscogsMarketplaceStats
-      >();
-      const preliminaryBestMatch = preliminaryResult.bestMatch;
+    }
+  } else {
+    const source = readListeningSource(body);
+    const candidateEdits = readCandidateEdits(body?.candidates);
 
-      if (preliminaryBestMatch) {
-        await wait(env.requestDelayMs);
+    if (
+      !source ||
+      !candidateEdits ||
+      candidateEdits.length === 0 ||
+      candidateEdits.length > MAX_SEARCH_UNITS ||
+      new Set(candidateEdits.map((candidate) => candidate.id)).size !==
+        candidateEdits.length
+    ) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "invalid_listening_candidates",
+            message:
+              "Provide between one and 100 unique albums from a supported source snapshot.",
+          },
+        },
+        { status: 400 },
+      );
+    }
 
-        try {
-          const stats = await getDiscogsMarketplaceStats({
-            releaseId: preliminaryBestMatch.id,
-            token: env.token,
-            userAgent: env.userAgent,
-            cacheTtlMs: cacheEnv.ttlMs,
-          });
+    const snapshot = await loadLatestListeningSnapshot(
+      resolved.owner,
+      source.provider,
+      source.sourceType,
+    );
 
-          marketplaceStatsByReleaseId.set(preliminaryBestMatch.id, stats);
-        } catch (error) {
-          const structuredError =
-            error instanceof DiscogsApiError
-              ? error.toStructuredError()
-              : createFallbackDiscogsError(error);
+    if (!snapshot) {
+      return NextResponse.json(
+        {
+          error: {
+            code: "listening_snapshot_required",
+            message:
+              source.provider === "youtube"
+                ? "Save YouTube links before matching the catalogue."
+                : "Import ListenBrainz history before matching the catalogue.",
+          },
+        },
+        { status: 409 },
+      );
+    }
 
-          rateLimit = mergeRateLimit(rateLimit, structuredError.rateLimit);
-          failures.push({
-            searchUnit: unit,
-            error: structuredError,
-          });
+    const storedCandidateById = new Map(
+      snapshot.candidates.map((candidate) => [candidate.id, candidate]),
+    );
 
-          if (structuredError.code === "discogs_rate_limited") {
-            stoppedForRateLimit = true;
-          }
-        }
+    for (const edit of candidateEdits) {
+      const stored = storedCandidateById.get(edit.id);
+
+      if (!stored) {
+        return NextResponse.json(
+          {
+            error: {
+              code: "listening_candidate_not_found",
+              message:
+                "One or more albums are not part of the latest source snapshot.",
+            },
+          },
+          { status: 400 },
+        );
       }
 
-      results.push(
-        rankDiscogsSearchResult(searchResult, marketplaceStatsByReleaseId),
-      );
+      if (
+        source.provider === "youtube" &&
+        stored.metadataQuality !== "complete"
+      ) {
+        return NextResponse.json(
+          {
+            error: {
+              code: "youtube_metadata_confirmation_required",
+              message:
+                "Confirm the artist and album for every YouTube link before catalogue matching.",
+            },
+          },
+          { status: 409 },
+        );
+      }
 
-      if (stoppedForRateLimit) {
-        break;
+      const artist =
+        stored.metadataQuality === "review" ? edit.artist : stored.artist.trim();
+      const album =
+        stored.metadataQuality === "review" ? edit.album : stored.album.trim();
+
+      if (!artist || !album) {
+        return NextResponse.json(
+          {
+            error: {
+              code: "listening_candidate_review_required",
+              message:
+                "Complete ambiguous artist and album names before matching.",
+            },
+          },
+          { status: 400 },
+        );
+      }
+
+      candidates.push({
+        ...stored,
+        artist,
+        album,
+        metadataQuality: "complete",
+        reviewReason: null,
+      });
+      sourceCandidateById.set(stored.id, {
+        artist,
+        album,
+        metadataQuality: "complete",
+      });
+    }
+
+    searchUnits = candidates.map(
+      createDiscogsSearchUnitFromListeningCandidate,
+    );
+  }
+
+  const collection = await listCollectionRecords(resolved.owner);
+  const results = [];
+  const failures = [];
+  let providerRateLimit = emptyRateLimit();
+  let stoppedForRateLimit = false;
+
+  for (const [index, unit] of searchUnits
+    .slice(0, MAX_SEARCH_UNITS)
+    .entries()) {
+    if (index > 0) await sleep(discogs.requestDelayMs);
+
+    try {
+      const catalogueResult = await searchDiscogsCatalogue({
+        unit,
+        token: discogs.token,
+        userAgent: discogs.userAgent,
+        cacheTtlMs: cache.ttlMs,
+      });
+      providerRateLimit = mergeRateLimit(
+        providerRateLimit,
+        catalogueResult.rateLimit,
+      );
+      const masterIdByRelease = new Map(
+        catalogueResult.candidates.map((candidate) => [
+          candidate.id,
+          candidate.masterId,
+        ]),
+      );
+      const ranked = rankDiscogsSearchResult({
+        searchUnit: unit,
+        candidates: catalogueResult.candidates.map((candidate) => ({
+          id: candidate.id,
+          type: candidate.type,
+          title: candidate.title,
+          year: candidate.year,
+          format: candidate.format,
+          country: candidate.country,
+          thumb: null,
+          uri: candidate.uri
+            ? `https://www.discogs.com${candidate.uri}`
+            : `https://www.discogs.com/release/${candidate.id}`,
+          resourceUrl: null,
+        })),
+        rateLimit: catalogueResult.rateLimit,
+      });
+      const best = ranked.bestMatch;
+      const masterId = best ? (masterIdByRelease.get(best.id) ?? null) : null;
+      const sourceCandidate = sourceCandidateById.get(unit.id);
+      const state = classifyCollectionGap({
+        candidateMetadataQuality:
+          sourceCandidate?.metadataQuality ?? "complete",
+        match: best
+          ? {
+              releaseId: best.id,
+              masterId,
+              confidence: best.confidence,
+            }
+          : null,
+        collection,
+      });
+      const markToken =
+        best &&
+        sourceCandidate &&
+        best.confidence >= RELIABLE_MATCH_CONFIDENCE &&
+        state !== "review" &&
+        state !== "unmatched"
+          ? createCollectionMarkToken({
+              secret: auth.cookieSecret,
+              payload: {
+                userId: resolved.owner.userId,
+                releaseId: best.id,
+                masterId,
+                artist: sourceCandidate.artist,
+                title: sourceCandidate.album,
+                format: best.format,
+                year: best.year,
+                confidence: best.confidence,
+                expiresAt: Date.now() + 15 * 60 * 1000,
+              },
+            })
+          : null;
+
+      if (isSpotifyRequest) {
+        results.push({
+          ...ranked,
+          state,
+          bestMatch: best
+            ? {
+                ...best,
+                masterId,
+                markToken,
+              }
+            : null,
+        });
+      } else {
+        results.push({
+          searchUnit: unit,
+          state,
+          bestMatch: best
+            ? {
+                id: best.id,
+                masterId,
+                title: best.title,
+                year: best.year,
+                format: best.format,
+                country: best.country,
+                discogsUrl: best.uri
+                  ? best.uri.startsWith("http")
+                    ? best.uri
+                    : `https://www.discogs.com${best.uri}`
+                  : `https://www.discogs.com/release/${best.id}`,
+                confidence: best.confidence,
+                confidenceLabel: best.confidenceLabel,
+                reasons: best.reasons,
+                markToken,
+              }
+            : null,
+        });
       }
     } catch (error) {
-      const structuredError =
-        error instanceof DiscogsApiError
-          ? error.toStructuredError()
-          : createFallbackDiscogsError(error);
-
-      rateLimit = mergeRateLimit(rateLimit, structuredError.rateLimit);
+      const structured =
+        error instanceof DiscogsCatalogueError
+          ? {
+              code: error.code,
+              message: error.message,
+              status: error.status,
+              retryAfterSeconds: error.retryAfterSeconds,
+              rateLimit: error.rateLimit,
+            }
+          : {
+              code: "discogs_provider_error",
+              message: "Discogs catalogue matching could not be completed.",
+              status: 0,
+              retryAfterSeconds: null,
+              rateLimit: emptyRateLimit(),
+              providerMessage: null,
+            };
+      providerRateLimit = mergeRateLimit(
+        providerRateLimit,
+        structured.rateLimit,
+      );
       failures.push({
         searchUnit: unit,
-        error: structuredError,
+        error: {
+          ...structured,
+          providerMessage:
+            "providerMessage" in structured
+              ? structured.providerMessage
+              : null,
+        },
       });
-
-      if (structuredError.code === "discogs_rate_limited") {
+      if (structured.code === "discogs_rate_limited") {
         stoppedForRateLimit = true;
         break;
       }
     }
   }
 
-  const skippedUnits = validSearchUnits.length - attemptedUnits;
-
   writeAuditLog("info", {
-    event: "discogs_match_completed",
+    event: "discogs_catalogue_match_completed",
     requestId,
     route: MATCH_ROUTE,
     status: 200,
-    subjectId,
-    ipId,
+    subjectId: stableHash(resolved.owner.userId),
     details: {
-      requestedUnits: validSearchUnits.length,
-      searchedUnits: attemptedUnits,
-      skippedUnits,
+      searchedUnits: results.length + failures.length,
+      results: results.length,
       failures: failures.length,
       stoppedForRateLimit,
     },
   });
 
-  return jsonResponse(
-    {
-      matchRun: {
-        searchedUnits: attemptedUnits,
-        skippedUnits,
-        maxSearchUnits: MAX_SEARCH_UNITS,
-        requestDelayMs: env.requestDelayMs,
-        stoppedForRateLimit,
-        rateLimit,
-        results,
-        failures,
-      },
+  const response = NextResponse.json({
+    matchRun: {
+      searchedUnits: results.length + failures.length,
+      skippedUnits:
+        searchUnits.length - (results.length + failures.length),
+      maxSearchUnits: MAX_SEARCH_UNITS,
+      requestDelayMs: discogs.requestDelayMs,
+      stoppedForRateLimit,
+      rateLimit: providerRateLimit,
+      results,
+      failures,
+      attribution: "Data provided by Discogs.",
     },
-    200,
-    authorized.response,
-    {
-      "X-RateLimit-Limit": String(requestRateLimit.limit),
-      "X-RateLimit-Remaining": String(requestRateLimit.remaining),
-      "X-RateLimit-Reset": String(Math.ceil(requestRateLimit.resetAt / 1000)),
-    },
-  );
+  });
+  copyCookieHeaders(spotifyCookieResponse, response);
+
+  return response;
 }

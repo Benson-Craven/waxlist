@@ -13,6 +13,12 @@ const baseResult: DiscogsSearchResult = {
     sourceTrackCount: 3,
     sourceTrackNames: ["Just the Way You Are", "In My Mind", "Be My World"],
     releaseYear: 2003,
+    source: {
+      provider: "spotify",
+      albumId: "spotify-album-star",
+      albumUrl: "https://open.spotify.com/album/star",
+    },
+    isCompilation: false,
   },
   rateLimit: {
     limit: 60,
@@ -52,11 +58,11 @@ describe("Discogs scoring", () => {
     expect(ranked.bestMatch?.id).toBe(100);
     expect(ranked.matches[0].confidence).toBeGreaterThanOrEqual(75);
     expect(ranked.matches[0].reasons).toContain(
-      "Discogs release title matches the Spotify album title.",
+      "Title matches exactly.",
     );
     expect(ranked.matches[1].confidence).toBeLessThan(75);
     expect(ranked.matches[1].reasons).toContain(
-      "Spotify album title did not match the Discogs release title.",
+      "Title doesn't match.",
     );
   });
 

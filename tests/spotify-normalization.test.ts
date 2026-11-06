@@ -6,6 +6,7 @@ import {
 import type { SpotifySession } from "@/lib/spotify/oauth";
 
 const session: SpotifySession = {
+  authUserId: "auth-1",
   accessToken: "access-token",
   expiresAt: Date.now() + 3600_000,
   tokenType: "Bearer",
@@ -141,6 +142,11 @@ describe("Spotify normalization", () => {
       normalizedArtist: "the records",
       sourceTrackCount: 2,
       releaseYear: 2022,
+      source: {
+        provider: "spotify",
+        albumId: "album-1",
+        albumUrl: "https://open.spotify.com/album/album-1",
+      },
     });
   });
 });

@@ -1,3 +1,5 @@
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import {
   copyCookieHeaders,
   fetchSpotifyJson,
@@ -82,7 +84,21 @@ function getMissingImportScopes(scope?: string) {
 }
 
 export async function GET(request: NextRequest) {
-  const authorized = await getSpotifyAuthorizedRequest(request);
+  const disabled = disabledCapabilityResponse("spotifyImport");
+  if (disabled) return disabled;
+  const owner = await resolveAuthenticatedOwner();
+
+  if (!owner.ok) {
+    return NextResponse.json(
+      { error: { code: owner.code, message: owner.message } },
+      { status: owner.code === "auth_required" ? 401 : 500 },
+    );
+  }
+
+  const authorized = await getSpotifyAuthorizedRequest(
+    request,
+    owner.owner.authUserId,
+  );
 
   if (!authorized.ok) {
     return authorized.response;

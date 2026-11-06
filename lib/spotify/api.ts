@@ -9,6 +9,7 @@ import {
   spotifyCookieOptions,
   SPOTIFY_TOKEN_URL,
   type SpotifySession,
+  isSpotifySessionForAuthUser,
 } from "@/lib/spotify/oauth";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -145,6 +146,7 @@ async function refreshSpotifySession(
   }
 
   const refreshedSession: SpotifySession = {
+    authUserId: session.authUserId,
     accessToken: tokenPayload.access_token,
     refreshToken: tokenPayload.refresh_token ?? session.refreshToken,
     expiresAt: Date.now() + tokenPayload.expires_in * 1000,
@@ -157,6 +159,7 @@ async function refreshSpotifySession(
     getSpotifyCookieNames().session,
     encodeSpotifySession(
       {
+        authUserId: refreshedSession.authUserId,
         accessToken: refreshedSession.accessToken,
         refreshToken: refreshedSession.refreshToken,
         expiresIn: tokenPayload.expires_in,
@@ -180,6 +183,7 @@ async function refreshSpotifySession(
 
 export async function getSpotifyAuthorizedRequest(
   request: NextRequest,
+  authUserId: string,
 ): Promise<SpotifyAuthorizedRequest> {
   const env = getSpotifyOAuthEnv();
   const sessionSecret = getSessionSecretEnv();
@@ -232,6 +236,17 @@ export async function getSpotifyAuthorizedRequest(
         401,
         "spotify_session_invalid",
         "Spotify session cookie is invalid. Connect Spotify again.",
+      ),
+    };
+  }
+
+  if (!isSpotifySessionForAuthUser(session, authUserId)) {
+    return {
+      ok: false,
+      response: spotifySessionJsonError(
+        403,
+        "spotify_session_account_mismatch",
+        "This Spotify connection belongs to a different WAXLIST account. Connect Spotify again.",
       ),
     };
   }

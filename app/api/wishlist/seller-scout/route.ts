@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 
 import {
   getApiCacheEnv,
@@ -170,6 +171,8 @@ function sellerScoutAuthRequired() {
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("sellerScout");
+  if (disabled) return disabled;
   const owner = await resolveCollectionOwner(request);
 
   if (!owner) {

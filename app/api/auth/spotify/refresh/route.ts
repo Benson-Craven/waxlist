@@ -1,9 +1,14 @@
-import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
+import { getAuthStatusForOwnerFailure } from "@/lib/auth/notices";
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { buildSignInHref } from "@/lib/auth/redirects";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
+import { getAppUrl, getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
 import {
   clearSpotifyAuthCookies,
   decodeSpotifySession,
   encodeSpotifySession,
   getSpotifyCookieNames,
+  isSpotifySessionForAuthUser,
   SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
   SPOTIFY_TOKEN_URL,
   spotifyCookieOptions,
@@ -39,7 +44,7 @@ function redirectHome(
 ) {
   const redirectOrigin = getSpotifyRedirectOrigin();
   const url = new URL(
-    status === "connected" ? "/app" : "/",
+    status === "connected" ? "/app?view=crate&source=spotify" : "/",
     redirectOrigin ?? request.url,
   );
   if (status !== "connected") {
@@ -58,6 +63,23 @@ function redirectHome(
 }
 
 export async function GET(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("spotifyImport");
+  if (disabled) return disabled;
+
+  const owner = await resolveAuthenticatedOwner();
+
+  if (!owner.ok) {
+    return NextResponse.redirect(
+      getAppUrl(
+        buildSignInHref({
+          next: "/app?view=crate&source=spotify",
+          source: "spotify",
+          status: getAuthStatusForOwnerFailure(owner.code),
+        }),
+      ),
+    );
+  }
+
   const env = getSpotifyOAuthEnv();
   const sessionSecret = getSessionSecretEnv();
 
@@ -78,7 +100,10 @@ export async function GET(request: NextRequest) {
     sessionSecret.secret,
   );
 
-  if (!session?.refreshToken) {
+  if (
+    !session?.refreshToken ||
+    !isSpotifySessionForAuthUser(session, owner.owner.authUserId)
+  ) {
     return redirectHome(request, "error", "session_expired", {
       clearSpotifySession: true,
     });
@@ -122,6 +147,7 @@ export async function GET(request: NextRequest) {
     getSpotifyCookieNames().session,
     encodeSpotifySession(
       {
+        authUserId: session.authUserId,
         accessToken: tokenPayload.access_token,
         refreshToken: tokenPayload.refresh_token ?? session.refreshToken,
         expiresIn: tokenPayload.expires_in,

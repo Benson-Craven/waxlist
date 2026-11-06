@@ -10,7 +10,10 @@ function record(overrides: Partial<CollectionRecord>): CollectionRecord {
   const value = <Key extends keyof CollectionRecord>(
     key: Key,
     fallback: CollectionRecord[Key],
-  ) => (Object.hasOwn(overrides, key) ? overrides[key] : fallback);
+  ) =>
+    Object.hasOwn(overrides, key)
+      ? (overrides[key] as CollectionRecord[Key])
+      : fallback;
 
   return {
     id: value("id", "record-1"),
@@ -29,10 +32,12 @@ function record(overrides: Partial<CollectionRecord>): CollectionRecord {
     imageUrl: null,
     mediaCondition: value("mediaCondition", "Very Good Plus (VG+)"),
     sleeveCondition: value("sleeveCondition", "Very Good (VG)"),
+    rating: value("rating", null),
+    favourite: value("favourite", false),
     status: value("status", "owned"),
     tags: value("tags", []),
     notes: value("notes", null),
-    room: value("room", "Music room"),
+    group: value("group", "Music group"),
     unit: value("unit", "Kallax"),
     shelf: value("shelf", "A"),
     slot: value("slot", "01"),
@@ -66,7 +71,7 @@ describe("collection health", () => {
           discogsReleaseId: 200,
           artist: "Sade",
           title: "Promise",
-          room: null,
+          group: null,
           unit: null,
           shelf: null,
           slot: null,
@@ -78,7 +83,7 @@ describe("collection health", () => {
           artist: "Sade",
           title: "Stronger Than Pride",
           status: "wanted",
-          room: null,
+          group: null,
           unit: null,
           shelf: null,
           slot: null,
@@ -221,7 +226,7 @@ describe("collection health", () => {
         record({
           id: "missing-location",
           discogsReleaseId: 400,
-          room: null,
+          group: null,
           unit: null,
           shelf: null,
           slot: null,

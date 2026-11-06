@@ -190,13 +190,13 @@ First-stage MVP order, much of which already exists:
 Next-stage implementation order:
 
 1. Authenticated app shell/workspace.
-2. Persistent navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+2. Persistent navigation for Dashboard, Collection, Wantlist, Digging, and Insights/Health. Collection owns shelving and group organization; there is no separate Shelf page.
 3. Record inspector pattern for selected records.
 4. Discogs collection and wantlist import using official API access only.
 5. Local-first collection cache/search for fast record-shop use.
 6. Digging mode with quick owned/wanted/duplicate/price/location answers.
 7. Smart wantlist rules: priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state where data supports it.
-8. Shelf/location fields: room, unit, shelf, slot, and notes.
+8. Shelf/location fields: group, unit, shelf, slot, and notes.
 9. Collection health dashboard: duplicates, high-value records, recently added records, not-recently-listened records where Spotify data supports it, and missing albums from collected or streamed artists.
 10. Pressing comparison/family-tree research views only after the collection browser, digging mode, and wantlist manager are useful.
 
@@ -223,7 +223,7 @@ Required authenticated workspace direction:
 
 - Landing page remains the unauthenticated first screen.
 - Authenticated users should land in a persistent app shell/workspace, not a hero page.
-- The app shell should include navigation for Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health.
+- The app shell should include navigation for Dashboard, Collection, Wantlist, Digging, and Insights/Health. Collection includes the shelving grid and group organization.
 - The app shell should include global search or command input, sync/import status, a main workspace region, and a record inspector region/drawer.
 - Overlays are supporting UI only: import review, match explanation, edit shelf location, pressing comparison details, and destructive confirmations.
 - Do not make modal overlays the primary product surface for collection browsing, wantlist management, or digging mode.
@@ -512,7 +512,7 @@ For authenticated app screens:
 ### Phase 9 — App Shell Foundation
 
 - Add authenticated workspace shell.
-- Add Dashboard, Collection, Wantlist, Digging, Shelf, and Insights/Health navigation stubs.
+- Add Dashboard, Collection, Wantlist, Digging, and Insights/Health navigation stubs.
 - Add global search/command input shell.
 - Add record inspector component shell.
 - Move connected workspace content into the app shell without breaking the landing page.
@@ -543,7 +543,7 @@ For authenticated app screens:
 ### Phase 13 — Smart Wantlist And Shelf
 
 - Add priority, tags, price ceiling, shipping ceiling, condition preference, seller/region filters, and ignored/relist state where available.
-- Add room/unit/shelf/slot/notes fields.
+- Add group/unit/shelf/slot/notes fields.
 - Add missing-location filters and location edit flows.
 
 ### Phase 14 — Collection Health

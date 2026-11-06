@@ -1,5 +1,8 @@
 import { getWishlistEnv } from "@/lib/config";
+import { deleteAuthIdentityById } from "@/lib/auth/identity-deletion";
+import { getNeonAuthServer } from "@/lib/auth/server";
 import { getSpotifyCookieNames, spotifyCookieOptions } from "@/lib/spotify/oauth";
+import { PRESSING_PREVIEW_COOKIE } from "@/lib/pressing-proof/preview-session";
 import {
   clearWishlistSessionCookie,
   copyWishlistCookieHeaders,
@@ -42,6 +45,31 @@ function clearSpotifyCookies(response: NextResponse) {
   });
 }
 
+function clearNeonAuthCookies(response: NextResponse) {
+  for (const name of [
+    "__Secure-neon-auth.local.session_data",
+    "__Secure-neon-auth.session_token",
+  ]) {
+    response.cookies.set(name, "", {
+      httpOnly: true,
+      maxAge: 0,
+      path: "/",
+      sameSite: "lax",
+      secure: true,
+    });
+  }
+}
+
+function clearPressingPreviewCookie(response: NextResponse) {
+  response.cookies.set(PRESSING_PREVIEW_COOKIE, "", {
+    httpOnly: true,
+    maxAge: 0,
+    path: "/",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+}
+
 async function deleteCurrentVisitorData(request: NextRequest) {
   const configurationError = deletionConfigurationError();
 
@@ -50,23 +78,80 @@ async function deleteCurrentVisitorData(request: NextRequest) {
   }
 
   const owner = await resolveWishlistOwner(request);
+  if (!owner) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "data_deletion_auth_required",
+          message: "Sign in before deleting account data.",
+        },
+      },
+      { status: 401 },
+    );
+  }
   const deletion = await deleteOwnerData(owner);
+  const auth = getNeonAuthServer();
+  let authDeletion: { error?: unknown } | null = null;
+
+  if (auth.ok) {
+    try {
+      authDeletion = await auth.auth.deleteUser({});
+    } catch {
+      authDeletion = null;
+    }
+  }
+
+  let authIdentityDeleted = Boolean(
+    auth.ok && authDeletion && !authDeletion.error,
+  );
+
+  if (!authIdentityDeleted && owner.authUserId) {
+    try {
+      authIdentityDeleted = await deleteAuthIdentityById(owner.authUserId);
+    } catch {
+      authIdentityDeleted = false;
+    }
+  }
+
   const acceptsHtml = request.headers
     .get("accept")
     ?.toLowerCase()
     .includes("text/html");
 
-  const response = acceptsHtml
-    ? NextResponse.redirect(new URL("/?spotify=disconnected", request.url), 303)
-    : NextResponse.json({
-        ok: true,
-        deletedUser: deletion.deletedUser,
-        clearedWishlistSession: deletion.clearedWishlistSession,
-      });
+  let response: NextResponse;
+
+  if (!authIdentityDeleted) {
+    response = acceptsHtml
+      ? NextResponse.redirect(
+          new URL("/data-deletion?error=auth_identity", request.url),
+          303,
+        )
+      : NextResponse.json(
+          {
+            error: {
+              code: "auth_identity_deletion_failed",
+              message:
+                "WAXLIST data was deleted, but the sign-in identity could not be removed. Contact support before signing in again.",
+              dataDeleted: true,
+            },
+          },
+          { status: 502 },
+        );
+  } else {
+    response = acceptsHtml
+      ? NextResponse.redirect(new URL("/", request.url), 303)
+      : NextResponse.json({
+          ok: true,
+          deletedUser: deletion.deletedUser,
+          deletedAuthUser: true,
+        });
+  }
 
   copyWishlistCookieHeaders(owner, response);
   clearWishlistSessionCookie(response);
   clearSpotifyCookies(response);
+  clearNeonAuthCookies(response);
+  clearPressingPreviewCookie(response);
 
   return response;
 }

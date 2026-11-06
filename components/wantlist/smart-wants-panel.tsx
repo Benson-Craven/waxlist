@@ -19,7 +19,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { LabelBadge } from "@/components/ui/label-badge";
 import {
   getDefaultSmartWantRules,
   getSmartWantExclusionLabel,
@@ -306,7 +306,7 @@ function getStatusCopy(status: SmartWantCandidateResult["evaluation"]["status"])
     return {
       label: "Match",
       icon: CheckCircle2,
-      className: "border-[#1DB954]/22 bg-[#1DB954]/10 text-[#C8F7D8]",
+      tone: "neutral" as const,
     };
   }
 
@@ -314,14 +314,14 @@ function getStatusCopy(status: SmartWantCandidateResult["evaluation"]["status"])
     return {
       label: "Rejected",
       icon: XCircle,
-      className: "border-[#D34278]/24 bg-[#D34278]/10 text-[#FFD7E4]",
+      tone: "quiet" as const,
     };
   }
 
   return {
     label: "Unknown",
     icon: CircleHelp,
-    className: "border-[#F08A4B]/24 bg-[#F08A4B]/10 text-[#FFE1C7]",
+    tone: "quiet" as const,
   };
 }
 
@@ -348,14 +348,17 @@ function selectedRecordFromCandidate(
     imageUrl: candidate.imageUrl,
     mediaCondition: null,
     sleeveCondition: null,
+    rating: null,
+    favourite: false,
     status: result.ownsExactRelease ? "owned" : null,
     tags: ["smart-want"],
     notes: null,
-    room: null,
+    group: null,
     unit: null,
     shelf: null,
     slot: null,
     priceHintLabel: null,
+    pricing: null,
     discogsUri: candidate.uri ?? `https://www.discogs.com/release/${candidate.id}`,
     sourceContext: `Smart Want: ${smartWant.artist} - ${smartWant.title}`,
     savedAt: null,
@@ -451,8 +454,8 @@ function SmartWantEditor({
             {smartWant ? "Edit Smart Want" : "Create Smart Want"}
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-[#FFF4E8]/50">
-            Define what counts as an acceptable version of one Discogs master.
-            This does not replace exact-release wants.
+            Set what counts as close enough for one album. Exact wants still
+            work on their own.
           </p>
         </div>
         {!smartWant ? (
@@ -471,8 +474,7 @@ function SmartWantEditor({
 
       {!smartWant && selectedRecord && !canUseSelectedMaster ? (
         <p className="mt-3 rounded-lg border border-[#F08A4B]/20 bg-[#F08A4B]/8 px-3 py-2 text-xs leading-5 text-[#FFE1C7]">
-          The selected record does not include a Discogs master id, so enter a
-          master release id manually.
+          This record has no master id. Enter one manually.
         </p>
       ) : null}
 
@@ -525,7 +527,7 @@ function SmartWantEditor({
           <span>
             Vinyl versions
             <span className="mt-1 block text-xs leading-5 text-[#FFF4E8]/42">
-              Leave enabled for the default &quot;any vinyl version&quot; Smart Want.
+              Leave on for any vinyl version.
             </span>
           </span>
         </label>
@@ -541,8 +543,7 @@ function SmartWantEditor({
           <span>
             Exclude exact releases I already own
             <span className="mt-1 block text-xs leading-5 text-[#FFF4E8]/42">
-              Owning another version from the same master does not exclude this
-              album-level want.
+              Owning another version doesn’t rule this album want out.
             </span>
           </span>
         </label>
@@ -647,8 +648,8 @@ function CandidateList({
   if (state.status === "idle") {
     return (
       <div className="mt-4 rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 p-4 text-sm leading-6 text-[#FFF4E8]/54">
-        Load candidate versions to preview deterministic matches, rejections,
-        and unknowns from Discogs master-version summaries.
+        Load the versions to see what matches, what doesn’t, and what’s
+        unclear.
       </div>
     );
   }
@@ -707,7 +708,7 @@ function CandidateList({
             {run.preview.rejectedCount.toLocaleString()} rejected ·{" "}
             {run.returnedVersions.toLocaleString()} of{" "}
             {run.totalVersions.toLocaleString()} versions checked
-            {run.truncated ? " in this bounded preview" : ""}
+            {run.truncated ? " in this pass" : ""}
           </p>
         </div>
         <Button
@@ -723,7 +724,7 @@ function CandidateList({
 
       {sortedCandidates.length === 0 ? (
         <div className="mt-3 rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 p-5 text-center text-sm leading-6 text-[#FFF4E8]/54">
-          No candidate versions were returned for this master release.
+          No versions came back for this album.
         </div>
       ) : (
         <div className="mt-3 grid gap-3">
@@ -739,23 +740,18 @@ function CandidateList({
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
-                          status.className,
-                        )}
-                      >
+                      <LabelBadge size="md" tone={status.tone}>
                         <StatusIcon className="size-3.5" aria-hidden="true" />
                         {status.label}
-                      </span>
+                      </LabelBadge>
                       {result.ownsExactRelease ? (
-                        <span className="rounded-full border border-[#F08A4B]/20 bg-[#F08A4B]/8 px-2.5 py-1 text-xs text-[#FFE1C7]">
+                        <LabelBadge size="md" tone="attention">
                           Exact owned
-                        </span>
+                        </LabelBadge>
                       ) : result.ownsAnotherVersionFromMaster ? (
-                        <span className="rounded-full border border-[#FFF4E8]/10 bg-[#FFF4E8]/6 px-2.5 py-1 text-xs text-[#FFF4E8]/52">
+                        <LabelBadge size="md" tone="quiet">
                           Another pressing owned
-                        </span>
+                        </LabelBadge>
                       ) : null}
                     </div>
                     <h3 className="mt-3 text-sm font-semibold text-[#FFF4E8]">
@@ -1008,8 +1004,7 @@ export function SmartWantsWorkspace({
               Smart Wants
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[#FFF4E8]/56">
-              Want an album but not one exact pressing? Save a master-level want
-              and define which versions count as acceptable.
+              Want the album, not one exact pressing? Set which versions count.
             </p>
           </div>
           <Button

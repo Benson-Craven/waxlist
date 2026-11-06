@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import {
   normalizeCollectionItem,
@@ -136,10 +136,11 @@ function toCollectionInsert(input: {
     imageUrl: input.release.imageUrl,
     mediaCondition: input.release.mediaCondition,
     sleeveCondition: input.release.sleeveCondition,
+    rating: input.release.rating,
     status: "owned" as const,
     tags: ["discogs-import"],
     notes: null,
-    room: null,
+    group: null,
     unit: null,
     shelf: null,
     slot: null,
@@ -255,6 +256,7 @@ async function upsertCollectionRelease(input: {
         imageUrl: value.imageUrl,
         mediaCondition: value.mediaCondition,
         sleeveCondition: value.sleeveCondition,
+        rating: sql`coalesce(${collectionItems.rating}, excluded.rating)`,
         status: "owned",
         syncedAt: value.syncedAt,
         updatedAt: value.updatedAt,

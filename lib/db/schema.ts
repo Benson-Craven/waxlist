@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -10,6 +11,10 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+import type { ListeningSourceSnapshot } from "@/lib/listening/types";
+import type { PressingEvidence } from "@/lib/pressing-detective/matching";
+import type { SpotifyPlaylistImportSummary } from "@/lib/spotify/workspace";
 
 export const collectionItemStatus = pgEnum("collection_item_status", [
   "owned",
@@ -23,11 +28,23 @@ export const discogsImportRunStatus = pgEnum("discogs_import_run_status", [
   "failed",
 ]);
 
+export const pressingInvestigationStatus = pgEnum(
+  "pressing_investigation_status",
+  ["active", "resolved", "dismissed"],
+);
+
+export const pressingResolutionKind = pgEnum("pressing_resolution_kind", [
+  "exact",
+  "shortlist",
+  "unknown",
+]);
+
 export const users = pgTable(
   "users",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    spotifyUserId: text("spotify_user_id").notNull(),
+    authUserId: text("auth_user_id"),
+    spotifyUserId: text("spotify_user_id"),
     displayName: text("display_name"),
     imageUrl: text("image_url"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -37,7 +54,10 @@ export const users = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (table) => [uniqueIndex("users_spotify_user_id_idx").on(table.spotifyUserId)],
+  (table) => [
+    uniqueIndex("users_auth_user_id_idx").on(table.authUserId),
+    uniqueIndex("users_spotify_user_id_idx").on(table.spotifyUserId),
+  ],
 );
 
 export const spotifyAccounts = pgTable(
@@ -83,22 +103,37 @@ export const apiCache = pgTable(
   (table) => [index("api_cache_expires_at_idx").on(table.expiresAt)],
 );
 
-export const spotifyImports = pgTable(
-  "spotify_imports",
+export const listeningSourceSnapshots = pgTable(
+  "listening_source_snapshots",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    provider: text("provider").default("spotify").notNull(),
     sourceType: text("source_type").notNull(),
     sourceId: text("source_id").notNull(),
     snapshotId: text("snapshot_id"),
-    summary: jsonb("summary").notNull(),
+    windowDays: integer("window_days"),
+    summary: jsonb("summary")
+      .$type<ListeningSourceSnapshot | SpotifyPlaylistImportSummary>()
+      .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
-    index("spotify_imports_user_id_idx").on(table.userId),
-    index("spotify_imports_source_idx").on(table.sourceType, table.sourceId),
+    index("listening_source_snapshots_user_id_idx").on(table.userId),
+    uniqueIndex("listening_source_snapshots_provider_source_type_idx").on(
+      table.userId,
+      table.provider,
+      table.sourceType,
+    ),
+    index("listening_source_snapshots_source_idx").on(
+      table.sourceType,
+      table.sourceId,
+    ),
   ],
 );
 
@@ -106,9 +141,10 @@ export const discogsMatches = pgTable(
   "discogs_matches",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    importId: uuid("import_id").references(() => spotifyImports.id, {
+    importId: uuid("import_id").references(() => listeningSourceSnapshots.id, {
       onDelete: "set null",
     }),
+    sourceProvider: text("source_provider").default("spotify").notNull(),
     sourceKey: text("source_key").notNull(),
     normalizedArtist: text("normalized_artist").notNull(),
     normalizedAlbum: text("normalized_album").notNull(),
@@ -134,8 +170,9 @@ export const wishlistItems = pgTable(
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     sessionIdHash: text("session_id_hash"),
     recordKey: text("record_key").notNull(),
-    spotifyAlbum: text("spotify_album").notNull(),
-    spotifyArtist: text("spotify_artist").notNull(),
+    sourceProvider: text("source_provider").default("spotify").notNull(),
+    sourceAlbum: text("source_album").notNull(),
+    sourceArtist: text("source_artist").notNull(),
     discogsTitle: text("discogs_title").notNull(),
     discogsArtist: text("discogs_artist").notNull(),
     discogsUrl: text("discogs_url"),
@@ -224,10 +261,12 @@ export const collectionItems = pgTable(
     imageUrl: text("image_url"),
     mediaCondition: text("media_condition"),
     sleeveCondition: text("sleeve_condition"),
+    rating: integer("rating"),
+    favourite: boolean("favourite").default(false).notNull(),
     status: collectionItemStatus("status").notNull(),
     tags: jsonb("tags").$type<string[]>().notNull(),
     notes: text("notes"),
-    room: text("room"),
+    group: text("group"),
     unit: text("unit"),
     shelf: text("shelf"),
     slot: text("slot"),
@@ -258,10 +297,77 @@ export const collectionItems = pgTable(
     index("collection_items_catalog_number_idx").on(table.catalogNumber),
     index("collection_items_user_location_idx").on(
       table.userId,
-      table.room,
+      table.group,
       table.unit,
       table.shelf,
     ),
+  ],
+);
+
+export const collectionPriceSnapshots = pgTable(
+  "collection_price_snapshots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    collectionItemId: uuid("collection_item_id")
+      .notNull()
+      .references(() => collectionItems.id, { onDelete: "cascade" }),
+    discogsReleaseId: integer("discogs_release_id").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    source: text("source").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("collection_price_snapshots_user_observed_idx").on(
+      table.userId,
+      table.observedAt,
+    ),
+    index("collection_price_snapshots_item_observed_idx").on(
+      table.collectionItemId,
+      table.observedAt,
+    ),
+    index("collection_price_snapshots_release_idx").on(
+      table.discogsReleaseId,
+    ),
+  ],
+);
+
+export const spinLogEntries = pgTable(
+  "spin_log_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    collectionItemId: uuid("collection_item_id")
+      .notNull()
+      .references(() => collectionItems.id, { onDelete: "cascade" }),
+    spunAt: timestamp("spun_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    side: text("side"),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("spin_log_entries_user_spun_at_idx").on(
+      table.userId,
+      table.spunAt,
+    ),
+    index("spin_log_entries_collection_item_idx").on(table.collectionItemId),
   ],
 );
 
@@ -314,5 +420,42 @@ export const discogsImportRuns = pgTable(
   (table) => [
     index("discogs_import_runs_user_id_idx").on(table.userId),
     index("discogs_import_runs_user_status_idx").on(table.userId, table.status),
+  ],
+);
+
+export const pressingInvestigations = pgTable(
+  "pressing_investigations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    masterReleaseId: integer("master_release_id"),
+    seedReleaseId: integer("seed_release_id"),
+    inputSource: text("input_source").notNull(),
+    userEvidence: jsonb("user_evidence").$type<PressingEvidence>().notNull(),
+    remainingCandidateIds: jsonb("remaining_candidate_ids")
+      .$type<number[]>()
+      .notNull(),
+    status: pressingInvestigationStatus("status").notNull(),
+    resolutionKind: pressingResolutionKind("resolution_kind").notNull(),
+    resolvedReleaseId: integer("resolved_release_id"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pressing_investigations_user_id_idx").on(table.userId),
+    index("pressing_investigations_user_status_idx").on(
+      table.userId,
+      table.status,
+    ),
+    index("pressing_investigations_master_release_id_idx").on(
+      table.masterReleaseId,
+    ),
   ],
 );

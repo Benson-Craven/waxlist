@@ -1,23 +1,35 @@
-import { getSpotifyCookieNames, spotifyCookieOptions } from "@/lib/spotify/oauth";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { getAppUrl } from "@/lib/config";
+import {
+  releaseSpotifyConnection,
+} from "@/lib/spotify/connection";
+import { clearSpotifyAuthCookies } from "@/lib/spotify/oauth";
 
 export const runtime = "nodejs";
 
-export async function POST(request: NextRequest) {
-  const url = new URL("/", request.url);
-  url.searchParams.set("spotify", "disconnected");
+const DISCONNECTED_PATH = "/app?view=profile&spotify=disconnected";
 
-  const response = NextResponse.redirect(url, 303);
-  const cookieNames = getSpotifyCookieNames();
+export async function POST() {
+  const owner = await resolveAuthenticatedOwner();
 
-  response.cookies.set(cookieNames.session, "", {
-    ...spotifyCookieOptions,
-    maxAge: 0,
-  });
-  response.cookies.set(cookieNames.state, "", {
-    ...spotifyCookieOptions,
-    maxAge: 0,
-  });
+  if (owner.ok) {
+    try {
+      await releaseSpotifyConnection(owner.owner.userId);
+    } catch {
+      // Cookies still need clearing so the browser stops presenting a session
+      // for an account whose stored tokens could not be removed.
+      console.error("[spotify-disconnect] Spotify link release failed.");
+    }
+  }
+
+  const response = NextResponse.redirect(
+    owner.ok ? getAppUrl(DISCONNECTED_PATH) : getAppUrl("/"),
+    303,
+  );
+
+  clearSpotifyAuthCookies(response);
 
   return response;
 }

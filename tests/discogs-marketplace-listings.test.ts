@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { searchDiscogsMarketplaceListings } from "@/lib/discogs/client";
+import {
+  DiscogsApiError,
+  searchDiscogsMarketplaceListings,
+} from "@/lib/discogs/client";
 
 describe("Discogs marketplace listing search", () => {
   afterEach(() => {
@@ -132,5 +135,40 @@ describe("Discogs marketplace listing search", () => {
       }),
     );
   });
-});
 
+  test("labels missing marketplace listing search as unavailable instead of retryable", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          message: "The requested resource was not found.",
+        }),
+        {
+          status: 404,
+          headers: {
+            "x-discogs-ratelimit": "25",
+            "x-discogs-ratelimit-used": "1",
+            "x-discogs-ratelimit-remaining": "24",
+          },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      searchDiscogsMarketplaceListings({
+        releaseId: 35212093,
+        token: "discogs-token",
+        userAgent: "Waxlist/0.1",
+        perPage: 5,
+        cacheTtlMs: 0,
+      }),
+    ).rejects.toMatchObject({
+      code: "discogs_not_found",
+      status: 404,
+      message:
+        "Discogs did not expose marketplace listings for this release. Open Discogs to inspect current seller listings.",
+      providerMessage: "The requested resource was not found.",
+    } satisfies Partial<DiscogsApiError>);
+  });
+});

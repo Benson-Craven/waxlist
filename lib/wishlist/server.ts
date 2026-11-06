@@ -1,49 +1,20 @@
 import "server-only";
 
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { randomUUID, createHash } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 
-import {
-  copyCookieHeaders,
-  fetchSpotifyJson,
-  getSpotifyAuthorizedRequest,
-} from "@/lib/spotify/api";
-import { getSpotifyCookieNames } from "@/lib/spotify/oauth";
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { WISHLIST_SESSION_COOKIE } from "@/lib/constants";
 import {
   normalizeWishlistRecord,
   type WishlistRecord,
 } from "@/lib/wishlist/record";
 
-const WISHLIST_SESSION_COOKIE = "waxlist_wishlist_session";
-const WISHLIST_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
-const WISHLIST_COOKIE_OPTIONS = {
-  httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-} as const;
-
-export type WishlistOwner =
-  | {
-      type: "user";
-      userId: string;
-      sessionIdHash: null;
-      cookieResponse?: NextResponse;
-    }
-  | {
-      type: "session";
-      userId: null;
-      sessionIdHash: string;
-      cookieResponse?: NextResponse;
-    };
-
-type SpotifyMeResponse = {
-  id?: string;
-  display_name?: string | null;
-  images?: Array<{
-    url?: string;
-  }>;
+export type WishlistOwner = {
+  type: "user";
+  userId: string;
+  authUserId?: string | null;
+  sessionIdHash: null;
 };
 
 async function loadDatabase() {
@@ -55,130 +26,20 @@ async function loadDatabase() {
   return { db, schema };
 }
 
-function createStableHash(value: string) {
-  return createHash("sha256").update(value).digest("base64url");
-}
-
-function getWishlistSessionId(request: NextRequest) {
-  const cookieValue = request.cookies.get(WISHLIST_SESSION_COOKIE)?.value;
-
-  if (cookieValue && /^[A-Za-z0-9_-]{16,128}$/.test(cookieValue)) {
-    return {
-      sessionId: cookieValue,
-      cookieResponse: undefined,
-    };
-  }
-
-  const sessionId = randomUUID();
-  const cookieResponse = new NextResponse(null);
-
-  cookieResponse.cookies.set(WISHLIST_SESSION_COOKIE, sessionId, {
-    ...WISHLIST_COOKIE_OPTIONS,
-    maxAge: WISHLIST_SESSION_MAX_AGE_SECONDS,
-  });
-
-  return {
-    sessionId,
-    cookieResponse,
-  };
-}
-
-async function resolveSpotifyUser(request: NextRequest) {
-  if (!request.cookies.has(getSpotifyCookieNames().session)) {
-    return null;
-  }
-
-  const authorized = await getSpotifyAuthorizedRequest(request);
-
-  if (!authorized.ok) {
-    return null;
-  }
-
-  const profileResponse = await fetchSpotifyJson<SpotifyMeResponse>(
-    "/me",
-    authorized.session,
-  );
-
-  if (
-    !profileResponse.ok ||
-    !profileResponse.payload ||
-    typeof profileResponse.payload !== "object" ||
-    typeof (profileResponse.payload as SpotifyMeResponse).id !== "string"
-  ) {
-    return null;
-  }
-
-  const profile = profileResponse.payload as SpotifyMeResponse;
-  const spotifyUserId = profile.id;
-
-  if (!spotifyUserId) {
-    return null;
-  }
-
-  const imageUrl = profile.images?.find((image) => image.url)?.url ?? null;
-  const { db, schema } = await loadDatabase();
-  const now = new Date();
-  const [user] = await db
-    .insert(schema.users)
-    .values({
-      spotifyUserId,
-      displayName: profile.display_name ?? null,
-      imageUrl,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: schema.users.spotifyUserId,
-      set: {
-        displayName: profile.display_name ?? null,
-        imageUrl,
-        updatedAt: now,
-      },
-    })
-    .returning({
-      id: schema.users.id,
-    });
-
-  if (!user) {
-    return null;
-  }
-
-  return {
-    userId: user.id,
-    cookieResponse: authorized.response,
-  };
-}
-
 export async function resolveWishlistOwner(
-  request: NextRequest,
-): Promise<WishlistOwner> {
-  const spotifyUser = await resolveSpotifyUser(request);
+  _request?: NextRequest,
+): Promise<WishlistOwner | null> {
+  void _request;
+  const resolved = await resolveAuthenticatedOwner();
 
-  if (spotifyUser) {
-    return {
-      type: "user",
-      userId: spotifyUser.userId,
-      sessionIdHash: null,
-      cookieResponse: spotifyUser.cookieResponse,
-    };
-  }
-
-  const fallbackSession = getWishlistSessionId(request);
-
-  return {
-    type: "session",
-    userId: null,
-    sessionIdHash: createStableHash(fallbackSession.sessionId),
-    cookieResponse: fallbackSession.cookieResponse,
-  };
+  return resolved.ok ? resolved.owner : null;
 }
 
 function ownerFilter(
   owner: WishlistOwner,
   schema: Awaited<ReturnType<typeof loadDatabase>>["schema"],
 ) {
-  return owner.type === "user"
-    ? eq(schema.wishlistItems.userId, owner.userId)
-    : eq(schema.wishlistItems.sessionIdHash, owner.sessionIdHash);
+  return eq(schema.wishlistItems.userId, owner.userId);
 }
 
 export async function listWishlistRecords(owner: WishlistOwner) {
@@ -203,11 +64,12 @@ export async function saveWishlistRecord(
   const { db, schema } = await loadDatabase();
   const now = new Date();
   const values = {
-    userId: owner.type === "user" ? owner.userId : null,
-    sessionIdHash: owner.type === "session" ? owner.sessionIdHash : null,
+    userId: owner.userId,
+    sessionIdHash: null,
     recordKey: record.id,
-    spotifyAlbum: record.spotifyAlbum,
-    spotifyArtist: record.spotifyArtist,
+    sourceProvider: record.sourceProvider,
+    sourceAlbum: record.sourceAlbum,
+    sourceArtist: record.sourceArtist,
     discogsTitle: record.discogsTitle,
     discogsArtist: record.discogsArtist,
     discogsUrl: record.discogsUri,
@@ -215,29 +77,16 @@ export async function saveWishlistRecord(
     createdAt: now,
   };
 
-  if (owner.type === "user") {
-    await db
-      .insert(schema.wishlistItems)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [
-          schema.wishlistItems.userId,
-          schema.wishlistItems.recordKey,
-        ],
-        set: values,
-      });
-  } else {
-    await db
-      .insert(schema.wishlistItems)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [
-          schema.wishlistItems.sessionIdHash,
-          schema.wishlistItems.recordKey,
-        ],
-        set: values,
-      });
-  }
+  await db
+    .insert(schema.wishlistItems)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        schema.wishlistItems.userId,
+        schema.wishlistItems.recordKey,
+      ],
+      set: values,
+    });
 
   return record;
 }
@@ -261,21 +110,10 @@ export async function removeWishlistRecord(
 export async function deleteOwnerData(owner: WishlistOwner) {
   const { db, schema } = await loadDatabase();
 
-  if (owner.type === "session") {
-    await db
-      .delete(schema.wishlistItems)
-      .where(eq(schema.wishlistItems.sessionIdHash, owner.sessionIdHash));
-
-    return {
-      deletedUser: false,
-      clearedWishlistSession: true,
-    };
-  }
-
   const importRows = await db
-    .select({ id: schema.spotifyImports.id })
-    .from(schema.spotifyImports)
-    .where(eq(schema.spotifyImports.userId, owner.userId));
+    .select({ id: schema.listeningSourceSnapshots.id })
+    .from(schema.listeningSourceSnapshots)
+    .where(eq(schema.listeningSourceSnapshots.userId, owner.userId));
   const importIds = importRows.map((row) => row.id);
 
   if (importIds.length > 0) {
@@ -283,8 +121,8 @@ export async function deleteOwnerData(owner: WishlistOwner) {
       .delete(schema.discogsMatches)
       .where(inArray(schema.discogsMatches.importId, importIds));
     await db
-      .delete(schema.spotifyImports)
-      .where(eq(schema.spotifyImports.userId, owner.userId));
+      .delete(schema.listeningSourceSnapshots)
+      .where(eq(schema.listeningSourceSnapshots.userId, owner.userId));
   }
 
   await db.delete(schema.users).where(eq(schema.users.id, owner.userId));
@@ -296,15 +134,14 @@ export async function deleteOwnerData(owner: WishlistOwner) {
 }
 
 export function clearWishlistSessionCookie(response: NextResponse) {
-  response.cookies.set(WISHLIST_SESSION_COOKIE, "", {
-    ...WISHLIST_COOKIE_OPTIONS,
-    maxAge: 0,
-  });
+  response.cookies.delete(WISHLIST_SESSION_COOKIE);
 }
 
 export function copyWishlistCookieHeaders(
-  owner: WishlistOwner,
-  response: NextResponse,
+  _owner: WishlistOwner,
+  _response: NextResponse,
 ) {
-  copyCookieHeaders(owner.cookieResponse, response);
+  void _owner;
+  void _response;
+  return;
 }

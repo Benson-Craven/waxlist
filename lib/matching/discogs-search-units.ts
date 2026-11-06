@@ -1,4 +1,8 @@
 import type { SpotifyAlbumCandidate } from "@/lib/spotify/workspace";
+import type {
+  ListeningAlbumCandidate,
+  ListeningSourceProvider,
+} from "@/lib/listening/types";
 
 export type DiscogsSearchUnit = {
   id: string;
@@ -10,8 +14,11 @@ export type DiscogsSearchUnit = {
   releaseYear: number | null;
   sourceTrackCount: number;
   sourceTrackNames: string[];
-  spotifyAlbumId: string | null;
-  spotifyAlbumUrl: string | null;
+  source: {
+    provider: ListeningSourceProvider;
+    albumId: string | null;
+    albumUrl: string | null;
+  };
   isCompilation: boolean;
 };
 
@@ -65,9 +72,38 @@ export function createDiscogsSearchUnit(
     releaseYear: getReleaseYear(candidate.releaseDate),
     sourceTrackCount: candidate.sourceTrackCount,
     sourceTrackNames: candidate.sourceTracks.map((track) => track.name),
-    spotifyAlbumId: candidate.sourceTracks[0]?.albumId ?? null,
-    spotifyAlbumUrl: candidate.albumExternalUrl,
+    source: {
+      provider: "spotify",
+      albumId: candidate.sourceTracks[0]?.albumId ?? null,
+      albumUrl: candidate.albumExternalUrl,
+    },
     isCompilation: candidate.isCompilation,
+  };
+}
+
+export function createDiscogsSearchUnitFromListeningCandidate(
+  candidate: ListeningAlbumCandidate,
+): DiscogsSearchUnit {
+  return {
+    id: candidate.id,
+    album: candidate.album,
+    artist: candidate.artist,
+    normalizedAlbum: normalizeForDiscogsSearch(candidate.album),
+    normalizedArtist: normalizeForDiscogsSearch(candidate.artist),
+    query: [candidate.artist, candidate.album].filter(Boolean).join(" "),
+    releaseYear: candidate.releaseYear,
+    sourceTrackCount: candidate.evidenceCount,
+    sourceTrackNames: candidate.trackEvidence.map((track) => track.name),
+    source: {
+      provider: candidate.provider,
+      albumId:
+        candidate.sourceIdentifiers.releaseGroupMbids[0] ??
+        candidate.sourceIdentifiers.releaseMbids[0] ??
+        candidate.sourceIdentifiers.youtubeVideoIds[0] ??
+        null,
+      albumUrl: candidate.sourceIdentifiers.sourceUrls[0] ?? null,
+    },
+    isCompilation: false,
   };
 }
 
@@ -91,7 +127,11 @@ export function createDiscogsSearchUnits(
       sourceTrackNames: Array.from(
         new Set([...existingUnit.sourceTrackNames, ...unit.sourceTrackNames]),
       ),
-      spotifyAlbumUrl: existingUnit.spotifyAlbumUrl ?? unit.spotifyAlbumUrl,
+      source: {
+        ...existingUnit.source,
+        albumUrl:
+          existingUnit.source.albumUrl ?? unit.source.albumUrl,
+      },
     });
   }
 

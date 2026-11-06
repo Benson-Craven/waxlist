@@ -1,19 +1,16 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { cookies, headers } from "next/headers";
 import { Button } from "@/components/ui/button";
 import {
-  SPOTIFY_AUTH_REFRESH_PATH,
+  AUTH_SIGN_IN_PATH,
+  AUTH_SIGN_UP_PATH,
   HOME_PAGE_COPY,
-  SPOTIFY_AUTH_START_PATH,
-  SPOTIFY_SESSION_COOKIE,
 } from "@/lib/constants";
 import { LiquidGradientCanvas } from "@/components/ui/liquid-gradient";
-import { appConfig, getSessionSecretEnv } from "@/lib/config";
-import {
-  decodeSpotifySession,
-  shouldRefreshSpotifySession,
-} from "@/lib/spotify/oauth";
+import { getNeonAuthSession } from "@/lib/auth/server";
+import { getAppUrl } from "@/lib/config";
+
+export const dynamic = "force-dynamic";
 
 const LANDING_GRADIENT_PRESETS = {
   sunset: {
@@ -103,15 +100,19 @@ type LandingGradientPresetName = keyof typeof LANDING_GRADIENT_PRESETS;
 const DEFAULT_LANDING_GRADIENT_PRESET =
   "sunset" satisfies LandingGradientPresetName;
 
-function SpotifyLogo() {
+function RecordIcon() {
   return (
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
       className="size-5 shrink-0"
-      fill="#1DB954"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
     >
-      <path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0Zm5.5 17.3a.75.75 0 0 1-1.03.25c-2.82-1.72-6.38-2.11-10.57-1.16a.75.75 0 1 1-.33-1.46c4.59-1.05 8.53-.59 11.68 1.33.35.21.47.68.25 1.04Zm1.46-3.25a.94.94 0 0 1-1.29.31c-3.23-1.99-8.16-2.56-11.98-1.4a.94.94 0 0 1-.55-1.8c4.36-1.32 9.78-.68 13.5 1.61.45.27.59.85.32 1.28Zm.12-3.39C15.2 8.36 8.8 8.15 5.08 9.3a1.12 1.12 0 1 1-.66-2.15c4.27-1.31 11.34-1.06 15.81 1.59a1.12 1.12 0 0 1-1.15 1.92Z" />
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 3v7M12 14v7" />
     </svg>
   );
 }
@@ -137,121 +138,35 @@ function getLandingGradientPreset(value: string | string[] | undefined) {
   };
 }
 
-function isSpotifyConnected(searchParams: { spotify?: string | string[] }) {
-  return getFirstSearchParam(searchParams.spotify) === "connected";
-}
-
-function getSpotifyRedirectOrigin() {
-  try {
-    return new URL(appConfig.spotifyRedirectUri).origin;
-  } catch {
-    return null;
-  }
-}
-
-function getSpotifyStatusMessage(searchParams: {
-  spotify?: string | string[];
-  missing?: string | string[];
-  reason?: string | string[];
-}) {
-  const spotifyStatus = getFirstSearchParam(searchParams.spotify);
-  const missing = getFirstSearchParam(searchParams.missing);
-  const reason = getFirstSearchParam(searchParams.reason);
-
-  if (spotifyStatus === "configuration_error") {
-    const missingLabel = missing
-      ? ` Missing: ${missing.split(",").join(", ")}.`
-      : "";
-
-    return `Spotify setup is incomplete. Add the required Spotify credentials and session secret to .env.local, then restart the dev server.${missingLabel}`;
-  }
-
-  if (spotifyStatus === "error") {
-    if (
-      reason === "session_expired" ||
-      reason === "session_missing" ||
-      reason === "session_refresh_failed" ||
-      reason === "invalid_grant"
-    ) {
-      return "Spotify session expired or could not be refreshed. Connect Spotify again.";
-    }
-
-    if (reason === "session_configuration_error") {
-      return "Spotify session setup is incomplete. Check SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, and SESSION_SECRET in .env.local, then restart the dev server.";
-    }
-
-    if (reason === "invalid_state") {
-      return "Spotify connection lost its session check. Open WAXLIST at http://127.0.0.1:3000 and try connecting again.";
-    }
-
-    if (reason === "token_exchange_failed") {
-      return "Spotify approved access, but WAXLIST could not finish the token exchange. Check the Spotify client secret and redirect URI.";
-    }
-
-    return "Spotify connection did not complete. Try connecting again.";
-  }
-
-  if (spotifyStatus === "connected") {
-    const spotifyRedirectOrigin = getSpotifyRedirectOrigin();
-
-    return spotifyRedirectOrigin
-      ? `Spotify connected on ${spotifyRedirectOrigin}. Open that address to load your workspace.`
-      : "Spotify connected, but the local browser host does not have the Spotify session cookie.";
-  }
-
-  if (spotifyStatus === "disconnected") {
-    return "Spotify disconnected.";
-  }
-
-  return undefined;
-}
-
 export default async function Home({
   searchParams,
 }: {
   searchParams: Promise<{
-    spotify?: string | string[];
-    missing?: string | string[];
-    reason?: string | string[];
     gradient?: string | string[];
   }>;
 }) {
-  const [resolvedSearchParams, cookieStore] = await Promise.all([
+  const [resolvedSearchParams, session] = await Promise.all([
     searchParams,
-    cookies(),
+    getNeonAuthSession(),
   ]);
-  const sessionCookieValue = cookieStore.get(SPOTIFY_SESSION_COOKIE)?.value;
-  const sessionSecret = sessionCookieValue ? getSessionSecretEnv() : null;
-  const spotifySession =
-    sessionCookieValue && sessionSecret?.ok
-      ? decodeSpotifySession(sessionCookieValue, sessionSecret.secret)
-      : undefined;
-  const hasSpotifySession = Boolean(spotifySession);
-  const spotifyConnectedParam = isSpotifyConnected(resolvedSearchParams);
-  const requestHeaders = await headers();
-  const requestHost = requestHeaders.get("host");
-  const spotifyRedirectOrigin = getSpotifyRedirectOrigin();
 
-  if (spotifyConnectedParam && !hasSpotifySession && spotifyRedirectOrigin) {
-    const spotifyRedirectHost = new URL(spotifyRedirectOrigin).host;
-
-    if (requestHost && requestHost !== spotifyRedirectHost) {
-      redirect(`${spotifyRedirectOrigin}/app`);
-    }
+  if (session.ok) {
+    redirect(getAppUrl("/app").toString());
   }
 
-  if (spotifySession && shouldRefreshSpotifySession(spotifySession)) {
-    redirect(SPOTIFY_AUTH_REFRESH_PATH);
-  }
-
-  if (hasSpotifySession) {
-    redirect("/app");
-  }
-
-  const spotifyStatusMessage = getSpotifyStatusMessage(resolvedSearchParams);
   const landingGradient = getLandingGradientPreset(
     resolvedSearchParams.gradient,
   );
+  const spotifySignUpUrl = getAppUrl(
+    `${AUTH_SIGN_UP_PATH}?source=spotify`,
+  ).toString();
+  const listenBrainzSignUpUrl = getAppUrl(
+    `${AUTH_SIGN_UP_PATH}?source=listenbrainz`,
+  ).toString();
+  const youtubeSignUpUrl = getAppUrl(
+    `${AUTH_SIGN_UP_PATH}?source=youtube`,
+  ).toString();
+  const signInUrl = getAppUrl(AUTH_SIGN_IN_PATH).toString();
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
@@ -301,16 +216,31 @@ export default async function Home({
 
         <Button
           asChild
-          className="mt-10 cursor-pointer rounded-full px-8 py-6 text-base font-medium"
+          className="mt-10 cursor-pointer rounded-full bg-[#FFF4E8] px-8 py-6 text-base font-semibold text-[#05030A] shadow-[0_0_42px_rgba(255,244,232,0.18)] transition hover:-translate-y-0.5 hover:bg-[#f6dfc9] hover:shadow-[0_0_54px_rgba(255,244,232,0.26)] focus-visible:ring-2 focus-visible:ring-[#FFF4E8] focus-visible:ring-offset-2 focus-visible:ring-offset-[#05030A]"
         >
-          <a
-            href={SPOTIFY_AUTH_START_PATH}
-            aria-label="Connect Spotify to start building your vinyl crate"
+          <Link
+            href={spotifySignUpUrl}
+            aria-label="Start with Spotify"
           >
-            <SpotifyLogo />
+            <RecordIcon />
             {HOME_PAGE_COPY.cta}
-          </a>
+          </Link>
         </Button>
+
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-white/70">
+          <Link
+            href={listenBrainzSignUpUrl}
+            className="underline decoration-white/25 underline-offset-4 transition hover:text-white"
+          >
+            Use ListenBrainz
+          </Link>
+          <Link
+            href={youtubeSignUpUrl}
+            className="underline decoration-white/25 underline-offset-4 transition hover:text-white"
+          >
+            Add YouTube links
+          </Link>
+        </div>
 
         <p className="mt-5 max-w-md text-balance text-xs leading-6 text-white/60 sm:text-sm">
           {HOME_PAGE_COPY.privacy}{" "}
@@ -329,14 +259,15 @@ export default async function Home({
           </Link>
         </p>
 
-        {spotifyStatusMessage ? (
-          <p
-            className="mt-4 max-w-md rounded-full border border-white/15 bg-black/25 px-4 py-2 text-balance text-xs leading-5 text-white/75 backdrop-blur-sm"
-            role="status"
+        <p className="mt-4 text-xs text-white/55">
+          Already have an account?{" "}
+          <Link
+            href={signInUrl}
+            className="font-medium text-white/80 underline-offset-4 hover:underline"
           >
-            {spotifyStatusMessage}
-          </p>
-        ) : null}
+            Sign in
+          </Link>
+        </p>
       </section>
     </main>
   );

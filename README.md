@@ -1,28 +1,21 @@
 # WAXLIST
 
-WAXLIST is a Next.js MVP that will turn Spotify listening data into a Discogs-backed vinyl crate worth collecting.
+A vinyl collection workspace. Connect a listening source, build a crate of what
+you're missing, and keep your shelf, wantlist, and listening diary in one place.
 
-## Current Foundation
-
-- Next.js App Router with routes under `app/`.
-- Tailwind CSS v4 via `app/globals.css` and `@tailwindcss/postcss`.
-- shadcn/ui configured with components under `components/ui`.
-- Landing page uses `components/ui/liquid-gradient.tsx` for the required dark liquid gradient.
-
-## Getting Started
-
-Install dependencies and run the development server with npm:
+## Run it
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`. Use this host consistently for Spotify OAuth; the redirect URI and browser origin must match so the OAuth state cookie is sent back on callback.
+Open `http://127.0.0.1:3000` and stay on that host. Spotify OAuth sends its state
+cookie back to the same origin, so a different hostname breaks the callback.
 
 ## Environment
 
-Copy `.env.example` to `.env.local` and fill real credentials when API work begins.
+Copy `.env.example` to `.env.local` and fill in the credentials you have.
 
 ```bash
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000
@@ -33,17 +26,16 @@ DISCOGS_USER_AGENT=Waxlist/0.1 +http://127.0.0.1:3000
 DISCOGS_TOKEN=
 ```
 
-Secrets without `NEXT_PUBLIC_` must stay server-side.
-
-In the Spotify Developer Dashboard, register this exact local redirect URI:
+Register this exact redirect URI in the Spotify Developer Dashboard:
 
 ```txt
 http://127.0.0.1:3000/api/auth/spotify/callback
 ```
 
-## MVP Guardrails
+Anything without `NEXT_PUBLIC_` stays on the server.
 
-- Do not add database logic until the persistence task is scoped.
-- Spotify OAuth uses temporary HTTP-only cookies only; no database token storage exists yet.
-- Discogs matching is server-side and uses normalized album search units; no Discogs data is stored yet.
-- Keep UI direction aligned with `DESIGN.md`.
+## Ground rules
+
+- Spotify and Discogs calls run server-side.
+- Matching is deterministic, and weak matches stay in review.
+- `DESIGN.md` is the visual source of truth; `AGENTS.md` covers the rest.

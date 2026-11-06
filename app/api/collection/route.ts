@@ -1,5 +1,11 @@
 import { getDatabaseEnv } from "@/lib/config";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import {
+  AddCollectionRecordError,
+  addCollectionRecord,
+} from "@/lib/collection/add";
+import {
+  collectionRecordForOwner,
   jsonWithCollectionOwnerCookies,
   listCollectionRecords,
   resolveCollectionOwner,
@@ -33,7 +39,7 @@ function collectionAuthRequired() {
     {
       error: {
         code: "collection_auth_required",
-        message: "Connect Spotify before using the collection workspace.",
+        message: "Sign in before using the collection workspace.",
       },
     },
     { status: 401 },
@@ -61,7 +67,10 @@ export async function GET(request: NextRequest) {
     return collectionAuthRequired();
   }
 
-  const records = await listCollectionRecords(owner);
+  // The Collection carousel is the owner's own shelf, so it renders the
+  // artwork stored with their records. Every other Restricted Data field stays
+  // stripped by the same owner-only sanitizer.
+  const records = await listCollectionRecords(owner, { keepArtwork: true });
 
   return jsonWithCollectionOwnerCookies(owner, { records });
 }
@@ -74,22 +83,11 @@ export async function POST(request: NextRequest) {
   }
 
   const payload = await readJsonBody(request);
-  const source =
-    payload && typeof payload === "object" && "source" in payload
-      ? (payload as { source?: unknown }).source
-      : null;
-
-  if (source !== "wishlist") {
-    return NextResponse.json(
-      {
-        error: {
-          code: "invalid_collection_seed_source",
-          message: "Collection seed source must be wishlist.",
-        },
-      },
-      { status: 400 },
-    );
-  }
+  const body =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : {};
+  const source = body.source ?? null;
 
   const owner = await resolveCollectionOwner(request);
 
@@ -97,7 +95,62 @@ export async function POST(request: NextRequest) {
     return collectionAuthRequired();
   }
 
-  const result = await seedCollectionFromWishlist(owner);
+  if (source === "wishlist") {
+    const disabled = disabledCapabilityResponse("discogsRestrictedData");
+    if (disabled) return disabled;
 
-  return jsonWithCollectionOwnerCookies(owner, result, 201);
+    const result = await seedCollectionFromWishlist(owner);
+
+    return jsonWithCollectionOwnerCookies(owner, result, 201);
+  }
+
+  const discogsReleaseId =
+    typeof body.discogsReleaseId === "number"
+      ? body.discogsReleaseId
+      : typeof body.discogsReleaseId === "string"
+        ? Number(body.discogsReleaseId)
+        : Number.NaN;
+  const status = body.status === "wanted" ? "wanted" : "owned";
+  const favourite =
+    typeof body.favourite === "boolean" ? body.favourite : undefined;
+
+  try {
+    const result = await addCollectionRecord(owner, {
+      discogsReleaseId,
+      status,
+      favourite,
+    });
+
+    return jsonWithCollectionOwnerCookies(
+      owner,
+      {
+        record: collectionRecordForOwner(result.record),
+        existed: result.existed,
+      },
+      201,
+    );
+  } catch (error) {
+    if (error instanceof AddCollectionRecordError) {
+      return NextResponse.json(
+        {
+          error: {
+            code: error.code,
+            message: error.message,
+            missing: error.missing,
+          },
+        },
+        { status: error.status },
+      );
+    }
+
+    return NextResponse.json(
+      {
+        error: {
+          code: "collection_add_failed",
+          message: "The record could not be added to your collection.",
+        },
+      },
+      { status: 500 },
+    );
+  }
 }

@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Instrument_Sans } from "next/font/google";
+import { OfflineShellStatus } from "@/components/app-shell/offline-shell-status";
 import { APP_NAME, HOME_PAGE_COPY } from "@/lib/constants";
 import "./globals.css";
 
@@ -17,6 +18,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: APP_NAME,
   description: HOME_PAGE_COPY.tagline,
+  manifest: "/manifest.webmanifest",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#05030A",
 };
 
 export default function RootLayout({
@@ -29,7 +35,10 @@ export default function RootLayout({
       lang="en"
       className={`${instrumentSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <OfflineShellStatus />
+      </body>
     </html>
   );
 }

@@ -8,6 +8,8 @@ const callbackPath = "/api/auth/spotify/callback";
 const required = [
   "SESSION_SECRET",
   "DATABASE_URL",
+  "NEON_AUTH_BASE_URL",
+  "NEON_AUTH_COOKIE_SECRET",
   "SPOTIFY_CLIENT_ID",
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",
@@ -32,6 +34,16 @@ function isPlaceholder(value) {
 }
 
 const failures = [];
+const betaInviteEmails = (process.env.WAXLIST_BETA_INVITE_EMAILS ?? "")
+  .split(/[\s,;]+/)
+  .map((email) => email.trim())
+  .filter(Boolean);
+
+if (process.env.NODE_ENV === "production" && betaInviteEmails.length === 0) {
+  failures.push(
+    "WAXLIST_BETA_INVITE_EMAILS must include at least one email in production.",
+  );
+}
 
 for (const key of required) {
   const value = process.env[key]?.trim();
@@ -49,6 +61,24 @@ for (const key of required) {
 const sessionSecret = process.env.SESSION_SECRET?.trim();
 if (sessionSecret && sessionSecret.length < 32) {
   failures.push("SESSION_SECRET must be at least 32 characters.");
+}
+
+const neonAuthBaseUrl = process.env.NEON_AUTH_BASE_URL?.trim();
+if (neonAuthBaseUrl) {
+  try {
+    const parsed = new URL(neonAuthBaseUrl);
+
+    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost") {
+      failures.push("NEON_AUTH_BASE_URL must use HTTPS outside localhost.");
+    }
+  } catch {
+    failures.push("NEON_AUTH_BASE_URL must be a valid absolute URL.");
+  }
+}
+
+const neonAuthCookieSecret = process.env.NEON_AUTH_COOKIE_SECRET?.trim();
+if (neonAuthCookieSecret && neonAuthCookieSecret.length < 32) {
+  failures.push("NEON_AUTH_COOKIE_SECRET must be at least 32 characters.");
 }
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -105,11 +135,18 @@ if (failures.length > 0) {
 const safeSummary = {
   SESSION_SECRET: "<set>",
   DATABASE_URL: new URL(databaseUrl).hostname,
+  NEON_AUTH_BASE_URL: neonAuthBaseUrl,
+  NEON_AUTH_COOKIE_SECRET: "<set>",
   SPOTIFY_CLIENT_ID: redact(process.env.SPOTIFY_CLIENT_ID.trim()),
   SPOTIFY_CLIENT_SECRET: "<set>",
   SPOTIFY_REDIRECT_URI: spotifyRedirectUri,
   DISCOGS_USER_AGENT: discogsUserAgent,
   DISCOGS_TOKEN: "<set>",
+  WAXLIST_BETA_INVITE_EMAILS: `${betaInviteEmails.length} configured`,
+  WAXLIST_ENABLE_PRESSING_PROOF:
+    process.env.WAXLIST_ENABLE_PRESSING_PROOF === "true"
+      ? "enabled"
+      : "disabled",
 };
 
 console.log("Environment validation passed:");

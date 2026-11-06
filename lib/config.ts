@@ -60,6 +60,18 @@ type DatabaseEnv =
       missing: string[];
     };
 
+export type NeonAuthEnv =
+  | {
+      ok: true;
+      baseUrl: string;
+      cookieSecret: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      missing: string[];
+    };
+
 type WishlistEnv =
   | {
       ok: true;
@@ -92,6 +104,13 @@ export const appConfig = {
   discogsUserAgent:
     process.env.DISCOGS_USER_AGENT ?? "Waxlist/0.1 +http://localhost:3000",
 } as const;
+
+export function getAppUrl(path = "/") {
+  const configuredAppUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
+
+  return new URL(path, configuredAppUrl);
+}
 
 function parseWholeNumberEnv(input: {
   key: string;
@@ -390,6 +409,69 @@ export function getDatabaseEnv(): DatabaseEnv {
   return {
     ok: true,
     databaseUrl,
+  };
+}
+
+export function getNeonAuthEnv(): NeonAuthEnv {
+  const baseUrl = process.env.NEON_AUTH_BASE_URL?.trim();
+  const cookieSecret = process.env.NEON_AUTH_COOKIE_SECRET?.trim();
+  const missing = (
+    [
+      ["NEON_AUTH_BASE_URL", baseUrl],
+      ["NEON_AUTH_COOKIE_SECRET", cookieSecret],
+    ] satisfies Array<[string, string | undefined]>
+  )
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      missing,
+      message: `Missing required Neon Auth environment variables: ${missing.join(
+        ", ",
+      )}.`,
+    };
+  }
+
+  if (!baseUrl || !cookieSecret) {
+    return {
+      ok: false,
+      missing: [],
+      message: "Neon Auth environment variables could not be validated.",
+    };
+  }
+
+  try {
+    const parsed = new URL(baseUrl);
+
+    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost") {
+      return {
+        ok: false,
+        missing: [],
+        message: "NEON_AUTH_BASE_URL must use HTTPS outside localhost.",
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      missing: [],
+      message: "NEON_AUTH_BASE_URL must be a valid absolute URL.",
+    };
+  }
+
+  if (cookieSecret.length < 32) {
+    return {
+      ok: false,
+      missing: [],
+      message: "NEON_AUTH_COOKIE_SECRET must be at least 32 characters.",
+    };
+  }
+
+  return {
+    ok: true,
+    baseUrl,
+    cookieSecret,
   };
 }
 

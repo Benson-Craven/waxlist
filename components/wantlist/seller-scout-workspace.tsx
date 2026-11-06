@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ExternalLink, Loader2, PackagePlus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LabelBadge } from "@/components/ui/label-badge";
 import type { SellerScoutRun } from "@/lib/wishlist/seller-scout";
 
 type SellerScoutPayload = {
@@ -108,9 +109,8 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
             Seller Bundle Scout
           </p>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#FFF4E8]/54">
-            Find Discogs sellers who appear to carry multiple exact wants.
-            WAXLIST shows listing evidence only; final shipping, handling, tax,
-            and checkout totals stay in Discogs.
+            Find sellers carrying several of your exact wants. WAXLIST shows
+            listing evidence only. Shipping, tax, and checkout stay in Discogs.
           </p>
         </div>
         <Button
@@ -130,7 +130,7 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
 
       {!hasRecords ? (
         <div className="mt-5 rounded-xl border border-[#FFF4E8]/8 bg-[#0b0b0f] p-4 text-sm text-[#FFF4E8]/58">
-          Save exact wanted records before scouting seller bundles.
+          Save exact wants before scouting bundles.
         </div>
       ) : null}
 
@@ -143,33 +143,33 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
       {run ? (
         <div className="mt-5">
           <div className="flex flex-wrap gap-2 text-xs text-[#FFF4E8]/58">
-            <span className="rounded-full bg-[#1b1b20] px-3 py-1.5">
+            <LabelBadge size="lg" tone="quiet">
               {run.opportunities.length} multi-want sellers
-            </span>
-            <span className="rounded-full bg-[#1b1b20] px-3 py-1.5">
+            </LabelBadge>
+            <LabelBadge size="lg" tone="quiet">
               {run.wantsScanned}/{run.totalWants} wants scanned
-            </span>
-            <span className="rounded-full bg-[#1b1b20] px-3 py-1.5">
+            </LabelBadge>
+            <LabelBadge size="lg" tone="quiet">
               {run.maxListingsPerWant} listings per want max
-            </span>
-            <span className="rounded-full bg-[#1b1b20] px-3 py-1.5">
+            </LabelBadge>
+            <LabelBadge size="lg" tone="quiet">
               {formatCheckedAt(run.checkedAt)}
-            </span>
+            </LabelBadge>
             {run.truncated ? (
-              <span className="rounded-full bg-[#351f15] px-3 py-1.5 text-[#F08A4B]">
+              <LabelBadge size="lg" tone="attention">
                 Capped run
-              </span>
+              </LabelBadge>
             ) : null}
             {run.failures.length > 0 ? (
-              <span className="rounded-full bg-[#351a24] px-3 py-1.5 text-[#D34278]">
+              <LabelBadge size="lg" tone="attention">
                 {run.failures.length} lookup issue
                 {run.failures.length === 1 ? "" : "s"}
-              </span>
+              </LabelBadge>
             ) : null}
             {run.stoppedForRateLimit ? (
-              <span className="rounded-full bg-[#351a24] px-3 py-1.5 text-[#D34278]">
+              <LabelBadge size="lg" tone="attention">
                 Stopped for Discogs rate limit
-              </span>
+              </LabelBadge>
             ) : null}
           </div>
 
@@ -222,12 +222,9 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {opportunity.reasons.map((reason) => (
-                          <span
-                            key={reason}
-                            className="rounded-full bg-[#1b1b20] px-2.5 py-1 text-[11px] text-[#FFF4E8]/50"
-                          >
+                          <LabelBadge key={reason} size="md" tone="quiet">
                             {reason}
-                          </span>
+                          </LabelBadge>
                         ))}
                       </div>
                     </div>
@@ -271,7 +268,7 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
                               : ""}
                           </p>
                           {listing.controlWarnings.length > 0 ? (
-                            <p className="mt-1 truncate text-[#F08A4B]/72">
+                            <p className="mt-1 truncate text-[#FFF4E8]/56">
                               {listing.controlWarnings.join(", ")}
                             </p>
                           ) : null}
@@ -302,8 +299,7 @@ export function SellerScoutWorkspace({ hasRecords }: { hasRecords: boolean }) {
             </div>
           ) : (
             <div className="mt-5 rounded-xl border border-[#FFF4E8]/8 bg-[#0b0b0f] p-4 text-sm leading-6 text-[#FFF4E8]/58">
-              No seller currently covers multiple exact wants in the scanned
-              listings.
+              No seller covers several exact wants right now.
               {run.singleSellerMatches.length > 0
                 ? ` ${run.singleSellerMatches.length} sellers matched one want.`
                 : ""}

@@ -1,0 +1,1 @@
+ALTER TABLE "collection_items" ADD COLUMN "rating" integer;

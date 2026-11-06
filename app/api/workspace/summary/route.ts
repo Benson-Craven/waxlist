@@ -33,7 +33,7 @@ function authRequired() {
     {
       error: {
         code: "workspace_summary_auth_required",
-        message: "Connect Spotify before loading the workspace summary.",
+        message: "Sign in before loading the workspace summary.",
       },
     },
     { status: 401 },

@@ -1,3 +1,4 @@
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import { getDatabaseEnv } from "@/lib/config";
 import {
   jsonWithCollectionOwnerCookies,
@@ -52,6 +53,9 @@ async function readJsonBody(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = smartWantConfigurationError();
 
   if (configurationError) {
@@ -70,6 +74,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = smartWantConfigurationError();
 
   if (configurationError) {

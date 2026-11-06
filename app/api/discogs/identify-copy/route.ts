@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 
 import {
   getApiCacheEnv,
@@ -22,11 +24,6 @@ import {
 import { writeAuditLog } from "@/lib/security/audit-log";
 import { readLimitedJsonRequest } from "@/lib/security/limited-json";
 import { checkRateLimit } from "@/lib/security/rate-limit";
-import {
-  copyCookieHeaders,
-  getSpotifyAuthorizedRequest,
-} from "@/lib/spotify/api";
-import { getSpotifyCookieNames } from "@/lib/spotify/oauth";
 
 export const runtime = "nodejs";
 
@@ -111,8 +108,7 @@ function jsonResponse(
     status,
     headers,
   });
-
-  copyCookieHeaders(cookieResponse, response);
+  void cookieResponse;
 
   return response;
 }
@@ -178,16 +174,19 @@ function mergeDetailedCandidate(
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
   const requestId = randomUUID();
   const ip = getClientIp(request);
   const ipId = ip ? createStableHash(ip) : undefined;
+  const resolved = await resolveAuthenticatedOwner();
 
-  if (!request.cookies.has(getSpotifyCookieNames().session)) {
+  if (!resolved.ok) {
     writeAuditLog("warn", {
       event: "discogs_identify_denied",
       requestId,
       route: IDENTIFY_ROUTE,
-      status: 401,
+      status: resolved.code === "auth_required" ? 401 : 500,
       ipId,
       reason: "unauthenticated",
     });
@@ -195,32 +194,16 @@ export async function POST(request: NextRequest) {
     return jsonResponse(
       {
         error: {
-          code: "spotify_not_connected",
-          message: "Connect Spotify before identifying Discogs pressings.",
+          code: resolved.code,
+          message: resolved.message,
         },
       },
-      401,
+      resolved.code === "auth_required" ? 401 : 500,
     );
   }
 
-  const authorized = await getSpotifyAuthorizedRequest(request);
-
-  if (!authorized.ok) {
-    writeAuditLog("warn", {
-      event: "discogs_identify_denied",
-      requestId,
-      route: IDENTIFY_ROUTE,
-      status: authorized.response.status,
-      ipId,
-      reason: "unauthenticated",
-    });
-
-    return authorized.response;
-  }
-
-  const subjectId = createStableHash(
-    authorized.session.refreshToken ?? authorized.session.accessToken,
-  );
+  const responseCookies: NextResponse | undefined = undefined;
+  const subjectId = createStableHash(resolved.owner.userId);
   const securityEnv = getDiscogsMatchSecurityEnv();
 
   if (!securityEnv.ok) {
@@ -233,7 +216,7 @@ export async function POST(request: NextRequest) {
         },
       },
       500,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -253,7 +236,7 @@ export async function POST(request: NextRequest) {
         },
       },
       429,
-      authorized.response,
+      responseCookies,
       {
         "Retry-After": String(requestRateLimit.retryAfterSeconds),
         "X-RateLimit-Limit": String(requestRateLimit.limit),
@@ -278,7 +261,7 @@ export async function POST(request: NextRequest) {
         },
       },
       500,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -292,7 +275,7 @@ export async function POST(request: NextRequest) {
         },
       },
       500,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -310,7 +293,7 @@ export async function POST(request: NextRequest) {
         },
       },
       bodyResult.status,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -331,7 +314,7 @@ export async function POST(request: NextRequest) {
         },
       },
       400,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -369,7 +352,7 @@ export async function POST(request: NextRequest) {
         },
       },
       400,
-      authorized.response,
+      responseCookies,
     );
   }
 
@@ -491,7 +474,7 @@ export async function POST(request: NextRequest) {
         },
       },
       200,
-      authorized.response,
+      responseCookies,
       {
         "X-RateLimit-Limit": String(requestRateLimit.limit),
         "X-RateLimit-Remaining": String(requestRateLimit.remaining),
@@ -519,7 +502,7 @@ export async function POST(request: NextRequest) {
         error: structuredError,
       },
       structuredError.status || 502,
-      authorized.response,
+      responseCookies,
     );
   }
 }

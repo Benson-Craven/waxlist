@@ -1,6 +1,8 @@
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 
 import type { collectionItems } from "@/lib/db/schema";
+import { normalizeCollectionRating } from "@/lib/collection/rating";
+import type { RecordPriceSummary } from "@/lib/collection/pricing";
 
 export type CollectionItemStatus = "owned" | "wanted";
 
@@ -23,10 +25,12 @@ export type CollectionItemInput = {
   imageUrl: string | null;
   mediaCondition: string | null;
   sleeveCondition: string | null;
+  rating: number | null;
+  favourite: boolean;
   status: CollectionItemStatus;
   tags: string[];
   notes: string | null;
-  room: string | null;
+  group: string | null;
   unit: string | null;
   shelf: string | null;
   slot: string | null;
@@ -49,7 +53,45 @@ export type CollectionRecord = Omit<
   syncedAt: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Attached when the owner's records are listed. It is derived from dated
+   * price snapshots, never stored on the collection row itself.
+   */
+  pricing?: RecordPriceSummary | null;
 };
+
+export function sanitizeRestrictedCollectionData(
+  record: CollectionRecord,
+): CollectionRecord {
+  return sanitizeRestrictedCollectionDataWithArtwork(record, false);
+}
+
+/**
+ * Keeps the stored album artwork for the authenticated owner's own shelf views
+ * while every other Restricted Data field stays stripped.
+ */
+export function sanitizeRestrictedCollectionDataForOwner(
+  record: CollectionRecord,
+): CollectionRecord {
+  return sanitizeRestrictedCollectionDataWithArtwork(record, true);
+}
+
+function sanitizeRestrictedCollectionDataWithArtwork(
+  record: CollectionRecord,
+  keepArtwork: boolean,
+): CollectionRecord {
+  return {
+    ...record,
+    discogsInstanceId: null,
+    discogsFolderId: null,
+    imageUrl: keepArtwork ? record.imageUrl : null,
+    mediaCondition: null,
+    sleeveCondition: null,
+    priceHintCents: null,
+    priceHintCurrency: null,
+    priceHintLabel: null,
+  };
+}
 
 export type CollectionItemPatch = Partial<
   Pick<
@@ -66,10 +108,12 @@ export type CollectionItemPatch = Partial<
     | "imageUrl"
     | "mediaCondition"
     | "sleeveCondition"
+    | "rating"
+    | "favourite"
     | "status"
     | "tags"
     | "notes"
-    | "room"
+    | "group"
     | "unit"
     | "shelf"
     | "slot"
@@ -187,10 +231,12 @@ export function normalizeCollectionItemInput(
     imageUrl: nullableString(record.imageUrl),
     mediaCondition: nullableString(record.mediaCondition),
     sleeveCondition: nullableString(record.sleeveCondition),
+    rating: normalizeCollectionRating(record.rating),
+    favourite: record.favourite === true,
     status: normalizedStatus(record.status),
     tags: normalizedStringList(record.tags),
     notes: nullableString(record.notes),
-    room: nullableString(record.room),
+    group: nullableString(record.group),
     unit: nullableString(record.unit),
     shelf: nullableString(record.shelf),
     slot: nullableString(record.slot),
@@ -294,13 +340,21 @@ export function normalizeCollectionItemPatch(
     }
   }
 
+  if ("rating" in record) {
+    patch.rating = normalizeCollectionRating(record.rating);
+  }
+
+  if ("favourite" in record) {
+    patch.favourite = record.favourite === true;
+  }
+
   if ("tags" in record) {
     patch.tags = normalizedStringList(record.tags);
   }
 
   for (const key of [
     "notes",
-    "room",
+    "group",
     "unit",
     "shelf",
     "slot",

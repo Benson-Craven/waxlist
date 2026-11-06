@@ -126,10 +126,11 @@ export type PriceBreakdownDisplay = {
 export type WishlistRecord = {
   id: string;
   savedAt: string;
-  spotifyAlbum: string;
-  spotifyArtist: string;
-  spotifyAlbumId: string | null;
-  spotifyAlbumUrl: string | null;
+  sourceProvider: "listenbrainz" | "spotify" | "youtube";
+  sourceAlbum: string;
+  sourceArtist: string;
+  sourceAlbumId: string | null;
+  sourceAlbumUrl: string | null;
   discogsReleaseId: number;
   discogsTitle: string;
   discogsArtist: string;
@@ -755,13 +756,30 @@ export function normalizeWishlistRecord(value: unknown): WishlistRecord | null {
     return null;
   }
 
-  const record = value as Partial<WishlistRecord>;
+  const record = value as Partial<WishlistRecord> & {
+    spotifyAlbum?: unknown;
+    spotifyArtist?: unknown;
+    spotifyAlbumId?: unknown;
+    spotifyAlbumUrl?: unknown;
+  };
+  const sourceAlbum =
+    typeof record.sourceAlbum === "string"
+      ? record.sourceAlbum
+      : typeof record.spotifyAlbum === "string"
+        ? record.spotifyAlbum
+        : null;
+  const sourceArtist =
+    typeof record.sourceArtist === "string"
+      ? record.sourceArtist
+      : typeof record.spotifyArtist === "string"
+        ? record.spotifyArtist
+        : null;
 
   if (
     typeof record.id !== "string" ||
     typeof record.savedAt !== "string" ||
-    typeof record.spotifyAlbum !== "string" ||
-    typeof record.spotifyArtist !== "string" ||
+    sourceAlbum === null ||
+    sourceArtist === null ||
     typeof record.discogsReleaseId !== "number" ||
     typeof record.discogsTitle !== "string"
   ) {
@@ -771,16 +789,26 @@ export function normalizeWishlistRecord(value: unknown): WishlistRecord | null {
   return {
     id: record.id,
     savedAt: record.savedAt,
-    spotifyAlbum: record.spotifyAlbum,
-    spotifyArtist: record.spotifyArtist,
-    spotifyAlbumId: nullableString(record.spotifyAlbumId),
-    spotifyAlbumUrl: nullableString(record.spotifyAlbumUrl),
+    sourceProvider:
+      record.sourceProvider === "listenbrainz" ||
+      record.sourceProvider === "youtube" ||
+      record.sourceProvider === "spotify"
+        ? record.sourceProvider
+        : "spotify",
+    sourceAlbum,
+    sourceArtist,
+    sourceAlbumId:
+      nullableString(record.sourceAlbumId) ??
+      nullableString(record.spotifyAlbumId),
+    sourceAlbumUrl:
+      nullableString(record.sourceAlbumUrl) ??
+      nullableString(record.spotifyAlbumUrl),
     discogsReleaseId: record.discogsReleaseId,
     discogsTitle: record.discogsTitle,
     discogsArtist:
       typeof record.discogsArtist === "string"
         ? record.discogsArtist
-        : record.spotifyArtist,
+        : sourceArtist,
     discogsUri: nullableString(record.discogsUri),
     thumb: nullableString(record.thumb),
     format: Array.isArray(record.format)

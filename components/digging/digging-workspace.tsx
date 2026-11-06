@@ -14,18 +14,25 @@ import {
   Disc3,
   Heart,
   Loader2,
-  MapPin,
-  PanelRight,
   Plus,
   Search,
-  StickyNote,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { formatCollectionLocation } from "@/lib/collection/location";
-import type { CollectionRecord } from "@/lib/collection/record";
+import { LabelBadge } from "@/components/ui/label-badge";
+import {
+  RecordQuickActions,
+  RecordStatusToggle,
+} from "@/components/records/record-actions";
+import { PressingIdentificationWorkspace } from "@/components/pressing-proof/pressing-identification-workspace";
+import { ShelfLocationSummary } from "@/components/shelf/shelf-location";
+import { isMissingCollectionLocation } from "@/lib/collection/location";
+import {
+  sanitizeRestrictedCollectionData,
+  type CollectionRecord,
+} from "@/lib/collection/record";
 import { cn } from "@/lib/utils";
 import {
   SELECTED_RECORD_CHANGED_EVENT,
@@ -47,7 +54,7 @@ type DiggingMatch = {
   score: number;
 };
 
-const DIGGING_CACHE_KEY = "waxlist:digging:collection:v1";
+const DIGGING_CACHE_KEY = "waxlist:digging:collection:v2";
 
 function isCollectionRecord(value: unknown): value is CollectionRecord {
   if (!value || typeof value !== "object") {
@@ -65,8 +72,15 @@ function isCollectionRecord(value: unknown): value is CollectionRecord {
   );
 }
 
-function normalizeCollectionRecords(value: unknown) {
-  return Array.isArray(value) ? value.filter(isCollectionRecord) : [];
+function normalizeCollectionRecords(
+  value: unknown,
+  showRestrictedData = false,
+) {
+  const records = Array.isArray(value) ? value.filter(isCollectionRecord) : [];
+
+  return showRestrictedData
+    ? records
+    : records.map(sanitizeRestrictedCollectionData);
 }
 
 async function readCollectionResponse(response: Response) {
@@ -120,7 +134,7 @@ function searchableText(record: CollectionRecord) {
     record.discogsReleaseId,
     record.discogsMasterId,
     record.year,
-    record.room,
+    record.group,
     record.unit,
     record.shelf,
     record.slot,
@@ -211,9 +225,10 @@ function applySelectedRecordToCollectionRecord(
   return {
     ...record,
     status: selected.status === "wanted" ? "wanted" : "owned",
+    favourite: selected.favourite,
     tags: selected.tags,
     notes: selected.notes,
-    room: selected.room,
+    group: selected.group,
     unit: selected.unit,
     shelf: selected.shelf,
     slot: selected.slot,
@@ -228,19 +243,13 @@ function SignalPill({
   children: ReactNode;
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex min-h-8 items-center gap-2 rounded-full border px-3 text-xs font-medium",
-        tone === "good" &&
-          "border-[#1DB954]/28 bg-[#1DB954]/12 text-[#BDF7CE]",
-        tone === "warn" &&
-          "border-[#F08A4B]/26 bg-[#F08A4B]/11 text-[#FFD4B5]",
-        tone === "muted" &&
-          "border-[#FFF4E8]/10 bg-[#FFF4E8]/6 text-[#FFF4E8]/62",
-      )}
+    <LabelBadge
+      size="lg"
+      className="min-h-8"
+      tone={tone === "warn" ? "attention" : tone === "muted" ? "quiet" : "neutral"}
     >
       {children}
-    </span>
+    </LabelBadge>
   );
 }
 
@@ -248,53 +257,26 @@ function DiggingResultCard({
   match,
   isSelected,
   onOpenInspector,
-  onPatchRecord,
+  showRestrictedData,
 }: {
   match: DiggingMatch;
   isSelected: boolean;
   onOpenInspector: (record: CollectionRecord) => void;
-  onPatchRecord: (
-    record: CollectionRecord,
-    patch: Partial<
-      Pick<
-        CollectionRecord,
-        "notes" | "status" | "room" | "unit" | "shelf" | "slot"
-      >
-    >,
-  ) => Promise<void>;
+  showRestrictedData: boolean;
 }) {
   const { record, duplicateCount } = match;
-  const [isSavingWanted, setIsSavingWanted] = useState(false);
-  const shelfLocation = formatCollectionLocation(record);
   const isOwned = record.status === "owned";
   const isWanted = record.status === "wanted";
-  const duplicateLabel =
-    duplicateCount > 1
-      ? `${duplicateCount.toLocaleString()} copies`
-      : "No duplicate";
-
-  async function handleAddWanted() {
-    setIsSavingWanted(true);
-
-    try {
-      await onPatchRecord(record, { status: "wanted" });
-      onOpenInspector({ ...record, status: "wanted" });
-    } finally {
-      setIsSavingWanted(false);
-    }
-  }
 
   return (
     <article
       className={cn(
-        "rounded-xl border bg-[#101014] p-4 transition",
-        isSelected
-          ? "border-[#FFF4E8]/22 bg-[#17151a]"
-          : "border-[#FFF4E8]/9",
+        "rounded-xl bg-[#101014] p-4 transition",
+        isSelected ? "bg-[#17151a]" : "",
       )}
     >
       <div className="flex gap-3">
-        <div className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-lg border border-[#FFF4E8]/10 bg-[#160A24]">
+        <div className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-lg bg-[#160A24]">
           {record.imageUrl ? (
             <div
               className="h-full w-full bg-cover bg-center"
@@ -309,7 +291,7 @@ function DiggingResultCard({
 
         <div className="min-w-0 flex-1">
           <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/38">
-            Discogs #{record.discogsReleaseId}
+            #{record.discogsReleaseId}
           </p>
           <h2 className="mt-1 truncate text-lg font-semibold text-[#FFF4E8]">
             {record.title}
@@ -321,59 +303,51 @@ function DiggingResultCard({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <SignalPill tone={isOwned ? "good" : "muted"}>
-          <CheckCircle2 className="size-3.5" aria-hidden="true" />
-          {isOwned ? "Owned" : "Not owned"}
-        </SignalPill>
-        <SignalPill tone={isWanted ? "good" : "muted"}>
-          <Heart className="size-3.5" aria-hidden="true" />
-          {isWanted ? "Wanted" : "Not wanted"}
-        </SignalPill>
-        <SignalPill tone={duplicateCount > 1 ? "warn" : "muted"}>
-          <AlertTriangle className="size-3.5" aria-hidden="true" />
-          {duplicateLabel}
-        </SignalPill>
-        <SignalPill tone={shelfLocation ? "good" : "warn"}>
-          <MapPin className="size-3.5" aria-hidden="true" />
-          {shelfLocation || "No shelf"}
-        </SignalPill>
-        <SignalPill tone={record.priceHintLabel || record.priceHintCents ? "good" : "muted"}>
-          {formatPriceHint(record)}
-        </SignalPill>
+        {isOwned ? (
+          <SignalPill tone="good">
+            <CheckCircle2 className="size-3.5" aria-hidden="true" />
+            Owned
+          </SignalPill>
+        ) : null}
+        {isWanted ? (
+          <SignalPill tone="good">
+            <Heart className="size-3.5" aria-hidden="true" />
+            Wanted
+          </SignalPill>
+        ) : null}
+        {duplicateCount > 1 ? (
+          <SignalPill tone="warn">
+            <AlertTriangle className="size-3.5" aria-hidden="true" />
+            {duplicateCount.toLocaleString()} copies
+          </SignalPill>
+        ) : null}
+        {isOwned ? (
+          <SignalPill tone={isMissingCollectionLocation(record) ? "warn" : "muted"}>
+            <ShelfLocationSummary location={record} />
+          </SignalPill>
+        ) : null}
+        {showRestrictedData ? (
+          <SignalPill
+            tone={record.priceHintLabel || record.priceHintCents ? "good" : "muted"}
+          >
+            {formatPriceHint(record)}
+          </SignalPill>
+        ) : null}
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <Button
-          type="button"
-          onClick={handleAddWanted}
-          disabled={isWanted || isSavingWanted}
-          className="rounded-full bg-[#FFF4E8] text-[#08030f] hover:bg-[#f6dfc9] disabled:opacity-45"
-        >
-          {isSavingWanted ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Heart className="size-4" aria-hidden="true" />
-          )}
-          {isWanted ? "Wanted" : "Add wanted"}
-        </Button>
-        <Button
-          type="button"
-          onClick={() => onOpenInspector(record)}
-          variant="outline"
-          className="rounded-full border-[#FFF4E8]/12 bg-[#FFF4E8]/7 text-[#FFF4E8]/76 hover:bg-[#FFF4E8]/12 hover:text-[#FFF4E8]"
-        >
-          <StickyNote className="size-4" aria-hidden="true" />
-          Add note
-        </Button>
-        <Button
-          type="button"
-          onClick={() => onOpenInspector(record)}
-          variant="outline"
-          className="col-span-2 rounded-full border-[#FFF4E8]/12 bg-transparent text-[#FFF4E8]/68 hover:bg-[#FFF4E8]/8 hover:text-[#FFF4E8]"
-        >
-          <PanelRight className="size-4" aria-hidden="true" />
-          Open inspector
-        </Button>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <RecordStatusToggle record={record} />
+        <div className="flex items-center gap-1">
+          <RecordQuickActions record={record} />
+          <Button
+            type="button"
+            onClick={() => onOpenInspector(record)}
+            variant="outline"
+            className="rounded-full border-transparent bg-[#FFF4E8]/7 px-4 text-[#FFF4E8]/70 hover:bg-[#FFF4E8]/12 hover:text-[#FFF4E8]"
+          >
+            Open
+          </Button>
+        </div>
       </div>
     </article>
   );
@@ -383,10 +357,14 @@ export function DiggingWorkspaceFrame({
   initialQuery = "",
   selectedRecord,
   onSelectRecord,
+  showRestrictedData = false,
+  allowPressingProof = false,
 }: {
   initialQuery?: string;
   selectedRecord: SelectedRecord | null;
   onSelectRecord: (record: SelectedRecord | null) => void;
+  showRestrictedData?: boolean;
+  allowPressingProof?: boolean;
 }) {
   const [records, setRecords] = useState<CollectionRecord[]>(() => {
     if (typeof window === "undefined") {
@@ -395,6 +373,7 @@ export function DiggingWorkspaceFrame({
 
     return normalizeCollectionRecords(
       JSON.parse(window.localStorage.getItem(DIGGING_CACHE_KEY) ?? "[]"),
+      showRestrictedData,
     );
   });
   const [query, setQuery] = useState(initialQuery);
@@ -408,6 +387,7 @@ export function DiggingWorkspaceFrame({
 
     const cachedRecords = normalizeCollectionRecords(
       JSON.parse(window.localStorage.getItem(DIGGING_CACHE_KEY) ?? "[]"),
+      showRestrictedData,
     );
 
     return cachedRecords.length > 0 ? "Cached collection" : "Loading collection";
@@ -420,6 +400,7 @@ export function DiggingWorkspaceFrame({
     return (
       normalizeCollectionRecords(
         JSON.parse(window.localStorage.getItem(DIGGING_CACHE_KEY) ?? "[]"),
+        showRestrictedData,
       ).length > 0
     );
   });
@@ -443,7 +424,10 @@ export function DiggingWorkspaceFrame({
           return;
         }
 
-        const nextRecords = normalizeCollectionRecords(payload?.records);
+        const nextRecords = normalizeCollectionRecords(
+          payload?.records,
+          showRestrictedData,
+        );
         setRecords(nextRecords);
         setSourceLabel("Live collection");
         window.localStorage.setItem(
@@ -472,7 +456,7 @@ export function DiggingWorkspaceFrame({
     return () => {
       isActive = false;
     };
-  }, [hasCachedRecordsAtLoad]);
+  }, [hasCachedRecordsAtLoad, showRestrictedData]);
 
   useEffect(() => {
     function handleSelectedRecordChange(event: Event) {
@@ -483,9 +467,15 @@ export function DiggingWorkspaceFrame({
       }
 
       setRecords((currentRecords) => {
-        const nextRecords = currentRecords.map((record) =>
-          applySelectedRecordToCollectionRecord(record, selected),
-        );
+        const nextRecords = currentRecords
+          .map((record) =>
+            applySelectedRecordToCollectionRecord(record, selected),
+          )
+          .map((record) =>
+            showRestrictedData
+              ? record
+              : sanitizeRestrictedCollectionData(record),
+          );
 
         window.localStorage.setItem(DIGGING_CACHE_KEY, JSON.stringify(nextRecords));
         return nextRecords;
@@ -503,7 +493,7 @@ export function DiggingWorkspaceFrame({
         handleSelectedRecordChange,
       );
     };
-  }, []);
+  }, [showRestrictedData]);
 
   async function handleSeedFromWishlist() {
     setIsSeeding(true);
@@ -518,7 +508,10 @@ export function DiggingWorkspaceFrame({
         body: JSON.stringify({ source: "wishlist" }),
       });
       const payload = await readCollectionResponse(response);
-      const nextRecords = normalizeCollectionRecords(payload?.records);
+      const nextRecords = normalizeCollectionRecords(
+        payload?.records,
+        showRestrictedData,
+      );
 
       setRecords(nextRecords);
       setSourceLabel("Live collection");
@@ -534,44 +527,6 @@ export function DiggingWorkspaceFrame({
     }
   }
 
-  async function patchRecord(
-    record: CollectionRecord,
-    patch: Partial<
-      Pick<
-        CollectionRecord,
-        "notes" | "status" | "room" | "unit" | "shelf" | "slot"
-      >
-    >,
-  ) {
-    const response = await fetch(`/api/collection/${record.id}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(patch),
-    });
-    const payload = await readCollectionResponse(response);
-    const updatedRecord = isCollectionRecord(payload?.record)
-      ? payload.record
-      : null;
-
-    if (!updatedRecord) {
-      throw new Error("Collection update returned an invalid record.");
-    }
-
-    setRecords((currentRecords) => {
-      const nextRecords = currentRecords.map((currentRecord) =>
-        currentRecord.id === updatedRecord.id ? updatedRecord : currentRecord,
-      );
-
-      window.localStorage.setItem(DIGGING_CACHE_KEY, JSON.stringify(nextRecords));
-      return nextRecords;
-    });
-    if (selectedRecord?.collectionId === updatedRecord.id) {
-      onSelectRecord(selectedRecordFromCollection(updatedRecord));
-    }
-  }
-
   function handleOpenInspector(record: CollectionRecord) {
     onSelectRecord(selectedRecordFromCollection(record));
   }
@@ -582,22 +537,18 @@ export function DiggingWorkspaceFrame({
   }
 
   return (
+    <div className="grid min-w-0 gap-5">
+      {allowPressingProof ? (
+        <PressingIdentificationWorkspace authenticated compact />
+      ) : null}
     <section className="min-w-0" aria-label="Digging lookup">
       <div className="grid gap-5">
         <div className="min-w-0">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-              <Barcode className="size-4" aria-hidden="true" />
-              <p className="text-xs uppercase tracking-[0.24em]">
-                Shop lookup
-              </p>
-            </div>
-            <div className="text-xs uppercase tracking-[0.2em] text-[#FFF4E8]/42 sm:text-right">
-              {sourceLabel} / {records.length.toLocaleString()} records
-            </div>
-          </div>
+          <p className="text-right text-xs tabular-nums text-[#FFF4E8]/38">
+            {sourceLabel} · {records.length.toLocaleString()} records
+          </p>
 
-          <div className="mt-5 rounded-xl border border-[#FFF4E8]/10 bg-[#101014] p-3 sm:p-4">
+          <div className="mt-2 rounded-xl bg-[#101014] p-3 sm:p-4">
             <label className="sr-only" htmlFor="digging-search">
               Search artist, title, barcode, catalog, or Discogs ID
             </label>
@@ -655,13 +606,13 @@ export function DiggingWorkspaceFrame({
                   aria-hidden="true"
                 />
                 <p className="mt-4 text-sm font-medium text-[#FFF4E8]/72">
-                  Scan or search while you browse
+                  Scan or search while you dig
                 </p>
-                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/45">
-                  Results will show owned state, wantlist state, duplicates,
-                  shelf location, and stored price hints instantly.
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/42">
+                  Owned, wanted, duplicates, and shelf location appear as you
+                  type.
                 </p>
-                {records.length === 0 ? (
+                {records.length === 0 && showRestrictedData ? (
                   <Button
                     type="button"
                     onClick={handleSeedFromWishlist}
@@ -684,16 +635,11 @@ export function DiggingWorkspaceFrame({
           ) : matches.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {topMatch ? (
-                <div className="rounded-xl border border-[#1DB954]/22 bg-[#1DB954]/8 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-[#BDF7CE]/72">
-                    Instant answer
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
-                    {topMatch.record.status === "owned"
-                      ? "You already own this."
-                      : "This is already wanted."}
-                  </p>
-                </div>
+                <p className="px-1 text-lg font-semibold text-[#FFF4E8]">
+                  {topMatch.record.status === "owned"
+                    ? "You already own this."
+                    : "This is already wanted."}
+                </p>
               ) : null}
 
               {matches.map((match) => (
@@ -702,7 +648,7 @@ export function DiggingWorkspaceFrame({
                   match={match}
                   isSelected={selectedRecord?.collectionId === match.record.id}
                   onOpenInspector={handleOpenInspector}
-                  onPatchRecord={patchRecord}
+                  showRestrictedData={showRestrictedData}
                 />
               ))}
             </div>
@@ -713,11 +659,10 @@ export function DiggingWorkspaceFrame({
                 aria-hidden="true"
               />
               <p className="mt-4 text-sm font-medium text-[#FFF4E8]/72">
-                No local match found
+                Not in your collection
               </p>
-              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/45">
-                Add/import the record before WAXLIST can answer owned, wanted,
-                duplicate, shelf, and price states from local data.
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/42">
+                Use Add vinyl to search Discogs, or import your collection.
               </p>
             </div>
           )}
@@ -725,5 +670,6 @@ export function DiggingWorkspaceFrame({
 
       </div>
     </section>
+    </div>
   );
 }

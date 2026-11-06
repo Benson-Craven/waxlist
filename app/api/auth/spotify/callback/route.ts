@@ -1,12 +1,27 @@
-import { getSessionSecretEnv, getSpotifyOAuthEnv } from "@/lib/config";
+import { NextResponse, type NextRequest } from "next/server";
+
 import {
+  claimLegacySpotifyData,
+  verifyLegacyClaimState,
+} from "@/lib/auth/legacy-claim";
+import { getAuthStatusForOwnerFailure } from "@/lib/auth/notices";
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { buildSignInHref } from "@/lib/auth/redirects";
+import { requireServerCapability } from "@/lib/capabilities/server";
+import {
+  getAppUrl,
+  getNeonAuthEnv,
+  getSessionSecretEnv,
+  getSpotifyOAuthEnv,
+} from "@/lib/config";
+import {
+  encodeSpotifyCredential,
   encodeSpotifySession,
   getSpotifyCookieNames,
   SPOTIFY_SESSION_COOKIE_MAX_AGE_SECONDS,
   SPOTIFY_TOKEN_URL,
   spotifyCookieOptions,
 } from "@/lib/spotify/oauth";
-import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
@@ -17,79 +32,87 @@ type SpotifyTokenResponse = {
   expires_in?: number;
   refresh_token?: string;
   error?: string;
-  error_description?: string;
 };
 
-function getSpotifyRedirectOrigin() {
-  const env = getSpotifyOAuthEnv();
+type SpotifyProfileResponse = {
+  id?: string;
+  display_name?: string | null;
+  images?: Array<{ url?: string }>;
+};
 
-  if (!env.ok) {
-    return null;
-  }
-
-  return new URL(env.redirectUri).origin;
-}
-
-function redirectHome(
-  request: NextRequest,
-  status: "connected" | "error" | "configuration_error",
+function redirectClaimResult(
+  status: "claimed" | "error",
   reason?: string,
 ) {
-  const redirectOrigin = getSpotifyRedirectOrigin();
-  const url = new URL(
-    status === "connected" ? "/app" : "/",
-    redirectOrigin ?? request.url,
-  );
-  if (status !== "connected") {
-    url.searchParams.set("spotify", status);
-  }
-  if (reason) {
-    url.searchParams.set("reason", reason);
-  }
-  return NextResponse.redirect(url);
+  const url = getAppUrl("/app?view=profile");
+  url.searchParams.set("spotifyClaim", status);
+  if (reason) url.searchParams.set("reason", reason);
+  const response = NextResponse.redirect(url);
+  response.cookies.delete(getSpotifyCookieNames().state);
+  response.cookies.delete(getSpotifyCookieNames().session);
+  return response;
 }
 
-function redirectWithOAuthError(request: NextRequest, reason: string) {
-  const response = redirectHome(request, "error", reason);
+function redirectConnectionResult(
+  status: "connected" | "error",
+  reason?: string,
+) {
+  const url = getAppUrl("/app?view=crate&source=spotify");
+  url.searchParams.set("spotify", status);
+  if (reason) url.searchParams.set("reason", reason);
+  const response = NextResponse.redirect(url);
   response.cookies.delete(getSpotifyCookieNames().state);
-  response.headers.set("x-waxlist-spotify-oauth-error", reason);
   return response;
 }
 
 export async function GET(request: NextRequest) {
-  const env = getSpotifyOAuthEnv();
-  const sessionSecret = getSessionSecretEnv();
-
-  if (!env.ok) {
-    const response = redirectHome(request, "configuration_error");
-    response.cookies.delete(getSpotifyCookieNames().state);
-    response.headers.set("x-waxlist-spotify-oauth-error", "configuration_error");
-    return response;
-  }
-
-  if (!sessionSecret.ok) {
-    const response = redirectHome(request, "configuration_error");
-    response.cookies.delete(getSpotifyCookieNames().state);
-    response.headers.set(
-      "x-waxlist-spotify-oauth-error",
-      "session_configuration_error",
+  const resolved = await resolveAuthenticatedOwner();
+  if (!resolved.ok) {
+    return NextResponse.redirect(
+      getAppUrl(
+        buildSignInHref({
+          next: "/app?view=crate&source=spotify",
+          source: "spotify",
+          status: getAuthStatusForOwnerFailure(resolved.code),
+        }),
+      ),
     );
-    return response;
   }
 
-  const { searchParams } = request.nextUrl;
-  const spotifyError = searchParams.get("error");
-
-  if (spotifyError) {
-    return redirectWithOAuthError(request, spotifyError);
+  const importCapability = requireServerCapability("spotifyImport");
+  const claimCapability = requireServerCapability("spotifyLegacyClaim");
+  if (!importCapability.ok && !claimCapability.ok) {
+    return NextResponse.json(
+      { error: importCapability.error },
+      { status: 404 },
+    );
   }
 
-  const code = searchParams.get("code");
-  const state = searchParams.get("state");
-  const expectedState = request.cookies.get(getSpotifyCookieNames().state)?.value;
+  const env = getSpotifyOAuthEnv();
+  const authEnv = getNeonAuthEnv();
+  const sessionEnv = getSessionSecretEnv();
+  if (!env.ok || !authEnv.ok || (importCapability.ok && !sessionEnv.ok)) {
+    return importCapability.ok
+      ? redirectConnectionResult("error", "configuration_error")
+      : redirectClaimResult("error", "configuration_error");
+  }
 
-  if (!code || !state || !expectedState || state !== expectedState) {
-    return redirectWithOAuthError(request, "invalid_state");
+  const code = request.nextUrl.searchParams.get("code");
+  const state = request.nextUrl.searchParams.get("state");
+  const stateCookie = request.cookies.get(getSpotifyCookieNames().state)?.value;
+
+  if (
+    !code ||
+    !verifyLegacyClaimState({
+      cookieValue: stateCookie,
+      nonce: state,
+      authUserId: resolved.owner.authUserId,
+      secret: authEnv.cookieSecret,
+    })
+  ) {
+    return importCapability.ok
+      ? redirectConnectionResult("error", "invalid_state")
+      : redirectClaimResult("error", "invalid_state");
   }
 
   const tokenResponse = await fetch(SPOTIFY_TOKEN_URL, {
@@ -107,34 +130,99 @@ export async function GET(request: NextRequest) {
     }),
     cache: "no-store",
   });
+  const token = (await tokenResponse.json()) as SpotifyTokenResponse;
 
-  const tokenPayload = (await tokenResponse.json()) as SpotifyTokenResponse;
-
-  if (
-    !tokenResponse.ok ||
-    !tokenPayload.access_token ||
-    !tokenPayload.token_type ||
-    !tokenPayload.expires_in
-  ) {
-    return redirectWithOAuthError(
-      request,
-      tokenPayload.error ?? "token_exchange_failed",
-    );
+  if (!tokenResponse.ok || !token.access_token || !token.token_type) {
+    return importCapability.ok
+      ? redirectConnectionResult(
+          "error",
+          token.error ?? "token_exchange_failed",
+        )
+      : redirectClaimResult(
+          "error",
+          token.error ?? "token_exchange_failed",
+        );
   }
 
-  const response = redirectHome(request, "connected");
-  response.cookies.delete(getSpotifyCookieNames().state);
+  const profileResponse = await fetch("https://api.spotify.com/v1/me", {
+    headers: {
+      Authorization: `${token.token_type} ${token.access_token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+  const profile = (await profileResponse.json()) as SpotifyProfileResponse;
+
+  if (!profileResponse.ok || !profile.id) {
+    return importCapability.ok
+      ? redirectConnectionResult("error", "profile_lookup_failed")
+      : redirectClaimResult("error", "profile_lookup_failed");
+  }
+
+  if (
+    importCapability.ok &&
+    (!sessionEnv.ok || !token.expires_in || token.expires_in <= 0)
+  ) {
+    return redirectConnectionResult("error", "invalid_token_response");
+  }
+
+  const connection =
+    importCapability.ok && sessionEnv.ok && token.expires_in
+      ? {
+          accessTokenEncrypted: encodeSpotifyCredential(
+            token.access_token,
+            sessionEnv.secret,
+          ),
+          refreshTokenEncrypted: token.refresh_token
+            ? encodeSpotifyCredential(token.refresh_token, sessionEnv.secret)
+            : null,
+          scope: token.scope ?? null,
+          expiresAt: new Date(Date.now() + token.expires_in * 1000),
+        }
+      : undefined;
+  let result: Awaited<ReturnType<typeof claimLegacySpotifyData>>;
+
+  try {
+    result = await claimLegacySpotifyData({
+      currentUserId: resolved.owner.userId,
+      authUserId: resolved.owner.authUserId,
+      spotifyUserId: profile.id,
+      displayName: profile.display_name ?? resolved.profile.displayName,
+      imageUrl:
+        profile.images?.find((image) => image.url)?.url ??
+        resolved.profile.imageUrl,
+      connection,
+    });
+  } catch {
+    console.error("[spotify-callback] Account-link persistence failed.");
+    return importCapability.ok
+      ? redirectConnectionResult("error", "connection_failed")
+      : redirectClaimResult("error", "connection_failed");
+  }
+
+  if (!result.ok) {
+    return importCapability.ok
+      ? redirectConnectionResult("error", result.code)
+      : redirectClaimResult("error", result.code);
+  }
+
+  if (!importCapability.ok || !sessionEnv.ok || !token.expires_in) {
+    return redirectClaimResult("claimed");
+  }
+
+  const response = redirectConnectionResult("connected");
   response.cookies.set(
     getSpotifyCookieNames().session,
     encodeSpotifySession(
       {
-        accessToken: tokenPayload.access_token,
-        refreshToken: tokenPayload.refresh_token,
-        expiresIn: tokenPayload.expires_in,
-        scope: tokenPayload.scope,
-        tokenType: tokenPayload.token_type,
+        authUserId: resolved.owner.authUserId,
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+        expiresIn: token.expires_in,
+        scope: token.scope,
+        tokenType: token.token_type,
       },
-      sessionSecret.secret,
+      sessionEnv.secret,
     ),
     {
       ...spotifyCookieOptions,

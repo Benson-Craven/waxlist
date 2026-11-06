@@ -1,3 +1,4 @@
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 import { getDatabaseEnv } from "@/lib/config";
 import {
   jsonWithCollectionOwnerCookies,
@@ -56,6 +57,9 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = smartWantConfigurationError();
 
   if (configurationError) {
@@ -123,6 +127,9 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
+
   const configurationError = smartWantConfigurationError();
 
   if (configurationError) {

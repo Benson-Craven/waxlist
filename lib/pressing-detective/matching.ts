@@ -50,6 +50,9 @@ export type RankedPressingCandidate = PressingCandidate & {
   matchedSignals: string[];
   conflictingSignals: string[];
   missingSignals: string[];
+  exactProofFields: Array<
+    "catalogNumber" | "matrixRunout" | "identifierText"
+  >;
 };
 
 export type PressingDiscriminator = {
@@ -192,22 +195,33 @@ function getRunoutOverlap(evidence: string, values: string[]) {
   return bestOverlap;
 }
 
-function anyIdentifierTextMatch(evidence: string, candidate: PressingCandidate) {
-  const haystack = [
+function identifierComparableValues(candidate: PressingCandidate) {
+  return [
     ...candidate.identifiers.flatMap((identifier) => [
       identifier.type,
       identifier.value,
       identifier.description,
     ]),
-    candidate.notes,
     ...candidate.pressingPlants,
     ...candidate.masteringCredits,
   ]
     .map((value) => cleanText(value))
-    .filter(Boolean)
-    .join(" ");
+    .filter(Boolean);
+}
 
-  return softMatch(evidence, [haystack]);
+function exactIdentifierTextMatch(
+  evidence: string,
+  candidate: PressingCandidate,
+) {
+  return exactMatch(
+    evidence,
+    identifierComparableValues(candidate),
+    normalizeSoft,
+  );
+}
+
+function anyIdentifierTextMatch(evidence: string, candidate: PressingCandidate) {
+  return softMatch(evidence, [identifierComparableValues(candidate).join(" ")]);
 }
 
 function scoreCandidate(
@@ -217,6 +231,7 @@ function scoreCandidate(
   const matchedSignals: string[] = [];
   const conflictingSignals: string[] = [];
   const missingSignals: string[] = [];
+  const exactProofFields: RankedPressingCandidate["exactProofFields"] = [];
   let possibleScore = 0;
   let matchedScore = 0;
   let hardConflict = false;
@@ -251,6 +266,7 @@ function scoreCandidate(
     ) {
       matchedScore += FIELD_WEIGHTS.catalogNumber;
       matchedSignals.push("Exact catalogue number match.");
+      exactProofFields.push("catalogNumber");
     } else {
       hardConflict = true;
       conflictingSignals.push("Catalogue number conflicts with this version.");
@@ -271,6 +287,7 @@ function scoreCandidate(
     ) {
       matchedScore += FIELD_WEIGHTS.matrixRunout;
       matchedSignals.push("Exact matrix/runout match.");
+      exactProofFields.push("matrixRunout");
     } else {
       const overlap = getRunoutOverlap(
         evidence.matrixRunout ?? "",
@@ -281,6 +298,7 @@ function scoreCandidate(
         matchedScore += Math.round(FIELD_WEIGHTS.matrixRunout * 0.62);
         matchedSignals.push("Partial matrix/runout token overlap.");
       } else {
+        hardConflict = candidate.detailLoaded;
         conflictingSignals.push("Matrix/runout does not match this version.");
       }
     }
@@ -341,7 +359,13 @@ function scoreCandidate(
   if (hasEvidence(evidence.identifierText)) {
     possibleScore += FIELD_WEIGHTS.identifierText;
 
-    if (anyIdentifierTextMatch(evidence.identifierText ?? "", candidate)) {
+    if (exactIdentifierTextMatch(evidence.identifierText ?? "", candidate)) {
+      matchedScore += FIELD_WEIGHTS.identifierText;
+      matchedSignals.push("Exact identifier match.");
+      exactProofFields.push("identifierText");
+    } else if (
+      anyIdentifierTextMatch(evidence.identifierText ?? "", candidate)
+    ) {
       matchedScore += FIELD_WEIGHTS.identifierText;
       matchedSignals.push("Identifier text appears in Discogs metadata.");
     } else if (!candidate.detailLoaded) {
@@ -392,6 +416,7 @@ function scoreCandidate(
     matchedSignals,
     conflictingSignals,
     missingSignals,
+    exactProofFields,
   };
 }
 
@@ -497,12 +522,6 @@ function candidateFieldValue(candidate: PressingCandidate, field: string) {
 
 const COMPARISON_FIELDS = [
   {
-    field: "matrixRunout",
-    label: "Matrix/runout",
-    title: "Check the matrix/runout",
-    description: "Compare the etched or stamped text in the dead wax.",
-  },
-  {
     field: "barcode",
     label: "Barcode",
     title: "Check the barcode",
@@ -521,22 +540,28 @@ const COMPARISON_FIELDS = [
     description: "The remaining versions list different countries.",
   },
   {
-    field: "year",
-    label: "Year",
-    title: "Check the release year",
-    description: "The remaining versions list different release years.",
-  },
-  {
     field: "label",
     label: "Label",
     title: "Check the label imprint",
     description: "Compare the label name printed on the centre label or sleeve.",
   },
   {
+    field: "year",
+    label: "Year",
+    title: "Check the release year",
+    description: "The remaining versions list different release years.",
+  },
+  {
     field: "format",
     label: "Format",
     title: "Check the format notes",
     description: "Compare LP, 12 inch, album, repress, or reissue details.",
+  },
+  {
+    field: "matrixRunout",
+    label: "Matrix/runout",
+    title: "Check the matrix/runout",
+    description: "Compare the etched or stamped text in the dead wax.",
   },
   {
     field: "pressingPlant",

@@ -577,29 +577,29 @@ function createLowQualityReasons(input: {
   }
 
   if (input.sourceTracksFound === 0 && input.playlistTrackTotal > 0) {
-    reasons.push("No usable Spotify track metadata was found.");
+    reasons.push("No usable track metadata.");
   }
 
   if (input.sourceTracksFound > 0 && input.uniqueAlbumCandidates < 3) {
-    reasons.push("The playlist has very few album candidates to match.");
+    reasons.push("Very few album candidates.");
   }
 
   if (input.skippedTracks > input.sourceTracksFound) {
-    reasons.push("Most playlist entries were unavailable or missing album data.");
+    reasons.push("Most entries had no album data.");
   }
 
   if (
     input.sourceTracksFound > 0 &&
     input.duplicateTracksRemoved / input.sourceTracksFound >= 0.4
   ) {
-    reasons.push("A large share of source tracks were duplicate album signals.");
+    reasons.push("Many duplicate album signals.");
   }
 
   if (
     input.uniqueAlbumCandidates > 0 &&
     input.compilationCandidates / input.uniqueAlbumCandidates >= 0.5
   ) {
-    reasons.push("Many candidates look like compilations, so artist matching may be weaker.");
+    reasons.push("Many candidates look like compilations.");
   }
 
   if (input.isTruncated) {
@@ -718,10 +718,10 @@ export function buildPlaylistImportSummary(input: {
         duplicateTracksRemoved: candidate.duplicateTracksRemoved,
         isCompilation: candidate.isCompilation,
         handlingNote: candidate.isCompilation
-          ? "Compilation detected; keep the track artist as the primary Discogs search signal."
+          ? "Compilation. Searching by the track artist."
           : sourceTrackCount > 1
-            ? "Multiple playlist tracks point to this album; send one album candidate forward."
-            : "Single source track; keep as a lower-signal album candidate.",
+            ? "Several tracks point here. One search goes forward."
+            : "One track. Lower signal.",
       } satisfies SpotifyAlbumCandidate;
     })
     .sort((first, second) => {

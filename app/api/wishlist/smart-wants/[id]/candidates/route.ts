@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
+import { disabledCapabilityResponse } from "@/lib/capabilities/response";
 
 import {
   getApiCacheEnv,
@@ -149,6 +150,8 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  const disabled = disabledCapabilityResponse("discogsRestrictedData");
+  if (disabled) return disabled;
   const configurationFailure = configurationError();
 
   if (configurationFailure) {

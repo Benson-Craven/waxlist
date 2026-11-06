@@ -1,4 +1,5 @@
 import { apiCacheKeys, getOrSetApiCache } from "@/lib/cache/api-cache";
+import { pickDiscogsArtworkUrl } from "@/lib/discogs/artwork";
 import type { DiscogsSearchUnit } from "@/lib/matching/discogs-search-units";
 import type {
   PressingCandidate,
@@ -125,6 +126,7 @@ export type DiscogsCollectionRelease = {
   imageUrl: string | null;
   mediaCondition: string | null;
   sleeveCondition: string | null;
+  rating: number | null;
 };
 
 export type DiscogsCollectionFieldMap = Map<number, string>;
@@ -181,6 +183,7 @@ type DiscogsCollectionResponse = {
     instance_id?: number;
     folder_id?: number;
     id?: number;
+    rating?: number;
     notes?: DiscogsCollectionNote[];
     basic_information?: {
       id?: number;
@@ -268,6 +271,8 @@ type DiscogsReleaseDetailResponse = {
     uri150?: string;
     resource_url?: string;
     type?: string;
+    width?: number;
+    height?: number;
   }>;
   formats?: Array<{
     name?: string;
@@ -599,6 +604,18 @@ export async function createDiscogsApiError(response: Response) {
   });
 }
 
+function createMarketplaceListingsError(error: DiscogsApiError) {
+  if (error.code !== "discogs_not_found") {
+    return error;
+  }
+
+  return new DiscogsApiError({
+    ...error.toStructuredError(),
+    message:
+      "Discogs did not expose marketplace listings for this release. Open Discogs to inspect current seller listings.",
+  });
+}
+
 function normalizeDiscogsCandidate(
   result: NonNullable<DiscogsSearchResponse["results"]>[number],
 ): DiscogsSearchCandidate | null {
@@ -866,10 +883,6 @@ function normalizeReleaseDetailCandidate(
         artist.role && artist.name ? `${artist.name} (${artist.role})` : artist.name,
       ),
   );
-  const primaryImage =
-    release.images?.find((image) => image.type === "primary") ??
-    release.images?.[0];
-
   return {
     id: releaseId,
     masterId: release.master_id ?? null,
@@ -886,12 +899,9 @@ function normalizeReleaseDetailCandidate(
     masteringCredits,
     identifiers,
     notes: firstCleanString([release.notes]),
-    imageUrl: firstCleanString([
-      primaryImage?.uri150,
-      primaryImage?.resource_url,
-      primaryImage?.uri,
-      release.thumb,
-    ]),
+    // Release payloads carry both a 600px rendition and a 150px thumbnail;
+    // the signed CDN URLs cannot be resized, so choose the large one here.
+    imageUrl: pickDiscogsArtworkUrl(release.images, release.thumb),
     uri: getDiscogsUri(release.uri, releaseId),
     resourceUrl: firstCleanString([release.resource_url]),
     detailLoaded: true,
@@ -957,6 +967,13 @@ function normalizeDiscogsCollectionRelease(
     ]),
     mediaCondition: getConditionNoteValue(item.notes, fieldNames, "media"),
     sleeveCondition: getConditionNoteValue(item.notes, fieldNames, "sleeve"),
+    rating:
+      typeof item.rating === "number" &&
+      Number.isInteger(item.rating) &&
+      item.rating >= 1 &&
+      item.rating <= 5
+        ? item.rating
+        : null,
   };
 }
 
@@ -1137,6 +1154,7 @@ export async function getDiscogsReleaseDetail(input: {
   token: string;
   userAgent: string;
   cacheTtlMs?: number;
+  signal?: AbortSignal;
 }): Promise<PressingCandidate> {
   return getOrSetApiCache(
     apiCacheKeys.discogsRelease(input.releaseId),
@@ -1147,6 +1165,7 @@ export async function getDiscogsReleaseDetail(input: {
         {
           headers: authHeaders(input),
           cache: "no-store",
+          signal: input.signal,
         },
       );
 
@@ -1260,7 +1279,9 @@ export async function searchDiscogsMarketplaceListings(input: {
       const rateLimit = readDiscogsRateLimit(response.headers);
 
       if (!response.ok) {
-        throw await createDiscogsApiError(response);
+        throw createMarketplaceListingsError(
+          await createDiscogsApiError(response),
+        );
       }
 
       const payload = (await response.json()) as DiscogsMarketplaceSearchResponse;
@@ -1290,13 +1311,17 @@ export async function getDiscogsMarketplaceStats(input: {
   token: string;
   userAgent: string;
   cacheTtlMs?: number;
+  /** Discogs converts the lowest listing into this currency. */
+  currency?: string;
 }): Promise<DiscogsMarketplaceStats> {
+  const currency = input.currency?.trim().toUpperCase() || "GBP";
   const stats = await getOrSetApiCache(
-    apiCacheKeys.discogsMarketplace(input.releaseId),
+    apiCacheKeys.discogsMarketplace(input.releaseId, currency),
     input.cacheTtlMs ?? 0,
     async () => {
+      const searchParams = new URLSearchParams({ curr_abbr: currency });
       const response = await fetch(
-        `https://api.discogs.com/marketplace/stats/${input.releaseId}`,
+        `https://api.discogs.com/marketplace/stats/${input.releaseId}?${searchParams}`,
         {
           headers: {
             ...authHeaders(input),

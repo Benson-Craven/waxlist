@@ -39,6 +39,18 @@ export type DiscogsMatchResult = {
 
 export const RELIABLE_MATCH_CONFIDENCE = 75;
 
+function sourceLabel(provider: DiscogsSearchUnit["source"]["provider"]) {
+  if (provider === "listenbrainz") {
+    return "ListenBrainz";
+  }
+
+  if (provider === "youtube") {
+    return "YouTube link";
+  }
+
+  return "Spotify";
+}
+
 function confidenceLabel(score: number) {
   if (score >= 90) {
     return "Very strong match";
@@ -251,34 +263,34 @@ function scoreCandidate(unit: DiscogsSearchUnit, candidate: DiscogsSearchCandida
 
   if (albumExact) {
     score += 34;
-    reasons.push("Discogs release title matches the Spotify album title.");
+    reasons.push("Title matches exactly.");
   } else if (albumCoverage >= 0.8) {
     score += 22;
-    reasons.push("Most Spotify album title tokens match the Discogs release title.");
+    reasons.push("Title mostly matches.");
   } else if (albumCoverage >= 0.5 && tokenize(unit.album).length > 1) {
     score += 10;
-    reasons.push("Some Spotify album title tokens match the Discogs release title.");
+    reasons.push("Title partly matches.");
   }
 
   if (artistExact) {
     score += 26;
-    reasons.push("Discogs artist matches the Spotify artist.");
+    reasons.push("Artist matches exactly.");
   } else if (artistCoverage >= 0.8) {
     score += 18;
-    reasons.push("Most Spotify artist tokens match the Discogs artist.");
+    reasons.push("Artist mostly matches.");
   } else if (artistCoverage >= 0.5 && tokenize(unit.artist).length > 1) {
     score += 8;
-    reasons.push("Some Spotify artist tokens match the Discogs artist.");
+    reasons.push("Artist partly matches.");
   }
 
   if (titleParts.hasSeparator && albumCoverage === 0) {
     score -= 22;
-    reasons.push("Spotify album title did not match the Discogs release title.");
+    reasons.push("Title doesn't match.");
   }
 
   if (titleParts.hasSeparator && artistCoverage === 0) {
     score -= 18;
-    reasons.push("Spotify artist did not match the Discogs artist.");
+    reasons.push("Artist doesn't match.");
   }
 
   if (
@@ -287,7 +299,7 @@ function scoreCandidate(unit: DiscogsSearchUnit, candidate: DiscogsSearchCandida
     )
   ) {
     score += 18;
-    reasons.push("Discogs result is marked as vinyl.");
+    reasons.push("Vinyl release.");
   }
 
   if (unit.releaseYear && candidate.year) {
@@ -295,16 +307,16 @@ function scoreCandidate(unit: DiscogsSearchUnit, candidate: DiscogsSearchCandida
 
     if (yearDistance === 0) {
       score += 8;
-      reasons.push("Release year matches Spotify metadata.");
+      reasons.push("Year matches.");
     } else if (yearDistance <= 2) {
       score += 4;
-      reasons.push("Release year is close to Spotify metadata.");
+      reasons.push("Year is close.");
     }
   }
 
   if (unit.sourceTrackCount > 1) {
     score += Math.min(8, unit.sourceTrackCount * 2);
-    reasons.push("Multiple Spotify source tracks support this album.");
+    reasons.push("Several tracks point here.");
   }
 
   if (candidate.type !== "release") {
@@ -338,17 +350,17 @@ export function rankDiscogsSearchResult(
         priceValue: priceHint.value,
       });
       const whyThis = [
-        `${result.searchUnit.sourceTrackCount.toLocaleString()} Spotify source ${
-          result.searchUnit.sourceTrackCount === 1 ? "track" : "tracks"
+        `${result.searchUnit.sourceTrackCount.toLocaleString()} ${sourceLabel(
+          result.searchUnit.source.provider,
+        )} ${
+          result.searchUnit.source.provider === "listenbrainz"
+            ? result.searchUnit.sourceTrackCount === 1
+              ? "listen"
+              : "listens"
+            : result.searchUnit.sourceTrackCount === 1
+              ? "track"
+              : "tracks"
         } pointed to this album.`,
-        availability.status === "available"
-          ? "Discogs currently reports marketplace copies for this release."
-          : availability.status === "unavailable"
-            ? "Discogs currently reports no marketplace copies for this release."
-            : "Marketplace availability could not be confirmed.",
-        priceHint.value !== null
-          ? `Lowest listed price hint is ${priceHint.label.toLowerCase()}.`
-          : "No Discogs price hint was available.",
       ];
 
       return {
@@ -360,7 +372,7 @@ export function rankDiscogsSearchResult(
         reasons:
           score.reasons.length > 0
             ? score.reasons
-            : ["Discogs returned this as a low-confidence candidate."],
+            : ["Low-confidence candidate."],
         whyThis,
         availability,
         priceHint,

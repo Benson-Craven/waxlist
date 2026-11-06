@@ -3,16 +3,24 @@ import "server-only";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 
+import { resolveAuthenticatedOwner } from "@/lib/auth/owner";
+import { getServerCapabilities } from "@/lib/capabilities/server";
+import {
+  CLEARED_COLLECTION_LOCATION,
+  type BulkLocationMode,
+} from "@/lib/collection/location-batch";
 import {
   normalizeCollectionItem,
+  sanitizeRestrictedCollectionData,
+  sanitizeRestrictedCollectionDataForOwner,
   serializeCollectionItem,
+  type CollectionItemInput,
   type CollectionItemPatch,
   type CollectionRecord,
 } from "@/lib/collection/record";
-import { copyCookieHeaders } from "@/lib/spotify/api";
+import { loadRecordPriceSummaries } from "@/lib/collection/pricing-server";
 import {
   listWishlistRecords,
-  resolveWishlistOwner,
   type WishlistOwner,
 } from "@/lib/wishlist/server";
 
@@ -28,15 +36,12 @@ async function loadDatabase() {
 }
 
 export async function resolveCollectionOwner(
-  request: NextRequest,
+  _request?: NextRequest,
 ): Promise<CollectionOwner | null> {
-  const owner = await resolveWishlistOwner(request);
+  void _request;
+  const resolved = await resolveAuthenticatedOwner();
 
-  if (owner.type !== "user") {
-    return null;
-  }
-
-  return owner;
+  return resolved.ok ? resolved.owner : null;
 }
 
 export async function resolveCollectionOwnerFromSpotifyProfile(input: {
@@ -93,12 +98,21 @@ export function jsonWithCollectionOwnerCookies(
 ) {
   const response = NextResponse.json(payload, { status });
 
-  copyCookieHeaders(owner.cookieResponse, response);
-
   return response;
 }
 
-export async function listCollectionRecords(owner: CollectionOwner) {
+type ListCollectionRecordsOptions = {
+  /**
+   * Keeps stored album artwork for the authenticated owner's own shelf.
+   * Every other Restricted Data field stays stripped.
+   */
+  keepArtwork?: boolean;
+};
+
+export async function listCollectionRecords(
+  owner: CollectionOwner,
+  options: ListCollectionRecordsOptions = {},
+) {
   const { db, schema } = await loadDatabase();
   const rows = await db
     .select()
@@ -106,10 +120,28 @@ export async function listCollectionRecords(owner: CollectionOwner) {
     .where(ownerFilter(owner, schema))
     .orderBy(desc(schema.collectionItems.updatedAt));
 
-  return rows
+  const records = rows
     .map((row) => normalizeCollectionItem(row))
     .filter((record): record is NonNullable<typeof record> => Boolean(record))
     .map(serializeCollectionItem);
+  const pricing = await loadRecordPriceSummaries(
+    owner,
+    records.map((record) => record.id),
+  );
+  const recordsWithPricing = records.map((record) => ({
+    ...record,
+    pricing: pricing.get(record.id) ?? null,
+  }));
+
+  if (getServerCapabilities().discogsRestrictedData) {
+    return recordsWithPricing;
+  }
+
+  return recordsWithPricing.map((record) =>
+    options.keepArtwork
+      ? sanitizeRestrictedCollectionDataForOwner(record)
+      : sanitizeRestrictedCollectionData(record),
+  );
 }
 
 export async function seedCollectionFromWishlist(owner: CollectionOwner) {
@@ -119,7 +151,7 @@ export async function seedCollectionFromWishlist(owner: CollectionOwner) {
   if (wishlistRecords.length === 0) {
     return {
       insertedCount: 0,
-      records: await listCollectionRecords(owner),
+      records: await listCollectionRecords(owner, { keepArtwork: true }),
     };
   }
 
@@ -148,8 +180,8 @@ export async function seedCollectionFromWishlist(owner: CollectionOwner) {
       discogsMasterId: null,
       discogsInstanceId: null,
       discogsFolderId: null,
-      artist: record.discogsArtist || record.spotifyArtist,
-      title: record.discogsTitle || record.spotifyAlbum,
+      artist: record.discogsArtist || record.sourceArtist,
+      title: record.discogsTitle || record.sourceAlbum,
       format: record.format,
       year: record.year,
       label: null,
@@ -161,7 +193,7 @@ export async function seedCollectionFromWishlist(owner: CollectionOwner) {
       status: "wanted" as const,
       tags: ["wishlist"],
       notes: null,
-      room: null,
+      group: null,
       unit: null,
       shelf: null,
       slot: null,
@@ -180,7 +212,60 @@ export async function seedCollectionFromWishlist(owner: CollectionOwner) {
 
   return {
     insertedCount: values.length,
-    records: await listCollectionRecords(owner),
+    records: await listCollectionRecords(owner, { keepArtwork: true }),
+  };
+}
+
+export type CollectionLocationUpdate = {
+  group: string | null;
+  unit: string | null;
+  shelf: string | null;
+  slot: string | null;
+};
+
+export async function updateCollectionLocations(
+  owner: CollectionOwner,
+  recordIds: string[],
+  location: CollectionLocationUpdate,
+  mode: BulkLocationMode = "replace",
+): Promise<{
+  updated: number;
+  records: Array<CollectionLocationUpdate & { id: string }>;
+}> {
+  const { db, schema } = await loadDatabase();
+  // Group mode is the merged Collection page's grouping control: move a record
+  // between groups without wiping the unit/shelf/slot already stored on it.
+  // Ungroup mode is its inverse: the spot inside a group is meaningless once
+  // the group is gone, so the whole location is cleared.
+  const nextLocation =
+    mode === "group"
+      ? { group: location.group }
+      : mode === "ungroup"
+        ? { ...CLEARED_COLLECTION_LOCATION }
+        : location;
+  const rows = await db
+    .update(schema.collectionItems)
+    .set({
+      ...nextLocation,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        ownerFilter(owner, schema),
+        inArray(schema.collectionItems.id, recordIds),
+      ),
+    )
+    .returning({
+      id: schema.collectionItems.id,
+      group: schema.collectionItems.group,
+      unit: schema.collectionItems.unit,
+      shelf: schema.collectionItems.shelf,
+      slot: schema.collectionItems.slot,
+    });
+
+  return {
+    updated: rows.length,
+    records: rows,
   };
 }
 
@@ -200,5 +285,103 @@ export async function updateCollectionRecord(
     .returning();
   const record = normalizeCollectionItem(row);
 
+  if (!record) {
+    return null;
+  }
+
+  return serializeCollectionItem(record);
+}
+
+/**
+ * Returns a saved row in the shape the owner's own shelf may render. The
+ * artwork is the only Restricted Data field kept for the authenticated owner.
+ */
+export function collectionRecordForOwner(record: CollectionRecord) {
+  return getServerCapabilities().discogsRestrictedData
+    ? record
+    : sanitizeRestrictedCollectionDataForOwner(record);
+}
+
+export async function getCollectionRecordById(
+  owner: CollectionOwner,
+  recordId: string,
+): Promise<CollectionRecord | null> {
+  const { db, schema } = await loadDatabase();
+  const [row] = await db
+    .select()
+    .from(schema.collectionItems)
+    .where(
+      and(
+        ownerFilter(owner, schema),
+        eq(schema.collectionItems.id, recordId),
+      ),
+    )
+    .limit(1);
+  const record = normalizeCollectionItem(row);
+
   return record ? serializeCollectionItem(record) : null;
+}
+
+export async function findCollectionRecordByRelease(
+  owner: CollectionOwner,
+  releaseId: number,
+): Promise<CollectionRecord | null> {
+  const { db, schema } = await loadDatabase();
+  const [row] = await db
+    .select()
+    .from(schema.collectionItems)
+    .where(
+      and(
+        ownerFilter(owner, schema),
+        eq(schema.collectionItems.discogsReleaseId, releaseId),
+      ),
+    )
+    .orderBy(desc(schema.collectionItems.updatedAt))
+    .limit(1);
+  const record = normalizeCollectionItem(row);
+
+  return record ? serializeCollectionItem(record) : null;
+}
+
+export async function insertCollectionRecord(
+  owner: CollectionOwner,
+  input: Omit<CollectionItemInput, "userId" | "syncedAt">,
+): Promise<CollectionRecord> {
+  const { db, schema } = await loadDatabase();
+  const now = new Date();
+  const [row] = await db
+    .insert(schema.collectionItems)
+    .values({
+      ...input,
+      userId: owner.userId,
+      syncedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  const record = normalizeCollectionItem(row);
+
+  if (!record) {
+    throw new Error("The saved record could not be read back.");
+  }
+
+  return serializeCollectionItem(record);
+}
+
+export async function deleteCollectionRecord(
+  owner: CollectionOwner,
+  recordId: string,
+): Promise<boolean> {
+  const { db, schema } = await loadDatabase();
+  const deleted = await db
+    .delete(schema.collectionItems)
+    .where(
+      and(
+        ownerFilter(owner, schema),
+        eq(schema.collectionItems.id, recordId),
+      ),
+    )
+    .returning({ id: schema.collectionItems.id });
+
+  return deleted.length > 0;
 }

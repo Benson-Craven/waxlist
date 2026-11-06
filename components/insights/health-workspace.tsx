@@ -5,22 +5,20 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowRight,
-  BarChart3,
   CheckCircle2,
   Clock3,
   Disc3,
   GitCompare,
   Loader2,
-  MapPin,
   Search,
   ShieldCheck,
   Sparkles,
-  SlidersHorizontal,
   Trophy,
   type LucideIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LabelBadge } from "@/components/ui/label-badge";
 import {
   COLLECTION_AUDIT_CATEGORY_LABELS,
   COLLECTION_AUDIT_SEVERITY_LABELS,
@@ -29,10 +27,12 @@ import {
   type CollectionAuditFinding,
   type CollectionAuditFindingType,
   type CollectionAuditSeverity,
-  type DuplicateRecordGroup,
 } from "@/lib/collection/health";
-import { formatCollectionLocation } from "@/lib/collection/location";
-import type { CollectionRecord } from "@/lib/collection/record";
+import {
+  sanitizeRestrictedCollectionData,
+  type CollectionRecord,
+} from "@/lib/collection/record";
+import { cn } from "@/lib/utils";
 import {
   selectedRecordFromCollection,
   type SelectedRecord,
@@ -45,24 +45,20 @@ type CollectionPayload = {
   };
 };
 
-const COLLECTION_CACHE_KEY = "waxlist:digging:collection:v1";
-const AUDIT_TYPE_FILTER_OPTIONS: Array<{
+const COLLECTION_CACHE_KEY = "waxlist:digging:collection:v2";
+const VISIBLE_RECORDS_PER_FINDING = 6;
+const SEVERITY_FILTER_ORDER: CollectionAuditSeverity[] = [
+  "high_attention",
+  "review_recommended",
+  "informational",
+];
+const TYPE_FILTER_OPTIONS: Array<{
   id: "all" | CollectionAuditFindingType;
   label: string;
 }> = [
-  { id: "all", label: "All types" },
+  { id: "all", label: "All findings" },
   ...Object.entries(COLLECTION_AUDIT_TYPE_LABELS).map(([id, label]) => ({
     id: id as CollectionAuditFindingType,
-    label,
-  })),
-];
-const AUDIT_SEVERITY_FILTER_OPTIONS: Array<{
-  id: "all" | CollectionAuditSeverity;
-  label: string;
-}> = [
-  { id: "all", label: "All severities" },
-  ...Object.entries(COLLECTION_AUDIT_SEVERITY_LABELS).map(([id, label]) => ({
-    id: id as CollectionAuditSeverity,
     label,
   })),
 ];
@@ -83,8 +79,15 @@ function isCollectionRecord(value: unknown): value is CollectionRecord {
   );
 }
 
-function normalizeCollectionRecords(value: unknown) {
-  return Array.isArray(value) ? value.filter(isCollectionRecord) : [];
+function normalizeCollectionRecords(
+  value: unknown,
+  showRestrictedData = false,
+) {
+  const records = Array.isArray(value) ? value.filter(isCollectionRecord) : [];
+
+  return showRestrictedData
+    ? records
+    : records.map(sanitizeRestrictedCollectionData);
 }
 
 async function readCollectionResponse(response: Response) {
@@ -99,10 +102,11 @@ async function readCollectionResponse(response: Response) {
   return payload;
 }
 
-function readCollectionCache() {
+function readCollectionCache(showRestrictedData = false) {
   try {
     return normalizeCollectionRecords(
       JSON.parse(window.localStorage.getItem(COLLECTION_CACHE_KEY) ?? "[]"),
+      showRestrictedData,
     );
   } catch {
     return [];
@@ -113,7 +117,7 @@ function writeCollectionCache(records: CollectionRecord[]) {
   try {
     window.localStorage.setItem(COLLECTION_CACHE_KEY, JSON.stringify(records));
   } catch {
-    // Insights can still render from the live response without browser cache.
+    // Health can still render from the live response without browser cache.
   }
 }
 
@@ -168,173 +172,158 @@ function formatDateTime(value: string) {
   }).format(new Date(timestamp));
 }
 
-function getHealthStateCopy(state: ReturnType<typeof buildCollectionHealth>["auditSummary"]["healthState"]) {
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+}
+
+function getHealthStateCopy(
+  state: ReturnType<typeof buildCollectionHealth>["auditSummary"]["healthState"],
+) {
   if (state === "healthy") {
     return {
       label: "Healthy",
-      body: "No collection integrity issues were found by the local checks currently available.",
+      body: "Nothing needs your attention right now.",
       icon: CheckCircle2,
-      tone: "border-[#1DB954]/22 bg-[#1DB954]/9 text-[#C8F7D8]",
+      panelClass: "bg-[#FFF4E8]/5",
+      iconClass: "bg-[#FFF4E8]/10 text-[#FFF4E8]/68",
     };
   }
 
   if (state === "mostly_healthy") {
     return {
       label: "Mostly healthy",
-      body: "Only informational clean-up items were found. Your collection remains usable.",
+      body: "A few tidy-up items. The collection is fine.",
       icon: ShieldCheck,
-      tone: "border-[#F08A4B]/22 bg-[#F08A4B]/8 text-[#FFE1C7]",
+      panelClass: "bg-[#FFF4E8]/6",
+      iconClass: "bg-[#FFF4E8]/10 text-[#FFF4E8]/68",
     };
   }
 
   return {
     label: "Needs attention",
-    body: "WAXLIST found review items that may affect duplicate, metadata, or identification confidence.",
+    body: "A few things are worth a look before they cause confusion.",
     icon: AlertTriangle,
-    tone: "border-[#D34278]/24 bg-[#D34278]/9 text-[#FFD7E4]",
+    panelClass: "bg-[#FFF4E8]/10",
+    iconClass: "bg-[#FFF4E8]/16 text-[#FFF4E8]/86",
   };
 }
 
-function getSeverityTone(severity: CollectionAuditSeverity) {
+function getSeverityPillTone(
+  severity: CollectionAuditSeverity,
+): "attention" | "neutral" | "quiet" {
   if (severity === "high_attention") {
-    return "border-[#D34278]/24 bg-[#D34278]/10 text-[#FFD7E4]";
+    return "attention";
   }
 
   if (severity === "review_recommended") {
-    return "border-[#F08A4B]/24 bg-[#F08A4B]/10 text-[#FFE1C7]";
+    return "neutral";
   }
 
-  return "border-[#FFF4E8]/12 bg-[#FFF4E8]/7 text-[#FFF4E8]/62";
+  return "quiet";
 }
 
-function formatRecordIssueMeta(record: CollectionRecord) {
-  return [
-    record.year,
-    record.label,
-    record.catalogNumber,
-    record.mediaCondition ? `Media ${record.mediaCondition}` : null,
-    record.sleeveCondition ? `Sleeve ${record.sleeveCondition}` : null,
-  ]
-    .filter(Boolean)
-    .join(" / ");
+function getFindingActionLabel(type: CollectionAuditFindingType) {
+  switch (type) {
+    case "exact_duplicate_release":
+      return "Review copies";
+    case "multiple_versions_master":
+      return "Compare versions";
+    case "missing_shelf_location":
+      return "Group records";
+    default:
+      return "Review records";
+  }
 }
 
-function EmptyState({
-  title,
-  body,
-  href,
-  cta,
-}: {
-  title: string;
-  body: string;
-  href?: string;
-  cta?: string;
-}) {
+function recordMeta(record: CollectionRecord) {
+  return `${record.artist} · Discogs #${record.discogsReleaseId}`;
+}
+
+function EmptyInline({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-[#FFF4E8]/12 bg-[#FFF4E8]/4 p-5 text-sm">
-      <p className="font-medium text-[#FFF4E8]/72">{title}</p>
-      <p className="mt-2 leading-6 text-[#FFF4E8]/48">{body}</p>
-      {href && cta ? (
-        <Link
-          href={href}
-          className="mt-4 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#FFF4E8]/66 hover:text-[#FFF4E8]"
-        >
-          {cta}
-          <ArrowRight className="size-3.5" aria-hidden="true" />
-        </Link>
-      ) : null}
-    </div>
+    <p className="rounded-xl bg-[#FFF4E8]/4 px-3 py-4 text-xs leading-5 text-[#FFF4E8]/45">
+      {children}
+    </p>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: number;
-  hint: string;
-}) {
+function VerdictMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border border-[#FFF4E8]/9 bg-[#101014] p-4">
-      <dt className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
+    <div>
+      <dt className="text-[0.65rem] uppercase tracking-[0.18em] text-[#FFF4E8]/45">
         {label}
       </dt>
-      <dd className="mt-2 text-2xl font-semibold text-[#FFF4E8]">
+      <dd className="mt-2 text-2xl font-semibold tabular-nums text-[#FFF4E8]">
         {value.toLocaleString()}
       </dd>
-      <p className="mt-2 text-xs leading-5 text-[#FFF4E8]/42">{hint}</p>
     </div>
   );
 }
 
-function AuditStatePanel({
-  health,
+function SeverityFilterChip({
+  active,
+  count,
+  onClick,
+  children,
 }: {
-  health: ReturnType<typeof buildCollectionHealth>;
+  active: boolean;
+  count: number;
+  onClick: () => void;
+  children: ReactNode;
 }) {
-  const stateCopy = getHealthStateCopy(health.auditSummary.healthState);
-  const Icon = stateCopy.icon;
-
   return (
-    <section
-      className={`rounded-2xl border p-5 ${stateCopy.tone}`}
-      aria-labelledby="audit-state-heading"
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition",
+        active
+          ? "bg-[#FFF4E8] text-[#08030f]"
+          : "bg-[#FFF4E8]/7 text-[#FFF4E8]/64 hover:bg-[#FFF4E8]/12 hover:text-[#FFF4E8]",
+      )}
     >
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Icon className="size-5" aria-hidden="true" />
-            <p className="text-xs uppercase tracking-[0.22em]">
-              Collection Health
-            </p>
-          </div>
-          <h2
-            id="audit-state-heading"
-            className="mt-3 text-2xl font-semibold text-[#FFF4E8]"
-          >
-            {stateCopy.label}
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#FFF4E8]/62">
-            {stateCopy.body}
-          </p>
-        </div>
-        <dl className="grid shrink-0 grid-cols-2 gap-3 text-sm sm:grid-cols-4 lg:min-w-[26rem]">
-          <div className="rounded-xl border border-current/12 bg-[#05030A]/24 p-3">
-            <dt className="text-xs text-[#FFF4E8]/48">Findings</dt>
-            <dd className="mt-1 text-xl font-semibold text-[#FFF4E8]">
-              {health.auditSummary.totalFindings.toLocaleString()}
-            </dd>
-          </div>
-          <div className="rounded-xl border border-current/12 bg-[#05030A]/24 p-3">
-            <dt className="text-xs text-[#FFF4E8]/48">High attention</dt>
-            <dd className="mt-1 text-xl font-semibold text-[#FFF4E8]">
-              {health.auditSummary.countsBySeverity.high_attention.toLocaleString()}
-            </dd>
-          </div>
-          <div className="rounded-xl border border-current/12 bg-[#05030A]/24 p-3">
-            <dt className="text-xs text-[#FFF4E8]/48">Review</dt>
-            <dd className="mt-1 text-xl font-semibold text-[#FFF4E8]">
-              {health.auditSummary.countsBySeverity.review_recommended.toLocaleString()}
-            </dd>
-          </div>
-          <div className="rounded-xl border border-current/12 bg-[#05030A]/24 p-3">
-            <dt className="text-xs text-[#FFF4E8]/48">Last checked</dt>
-            <dd className="mt-1 text-xs font-medium leading-5 text-[#FFF4E8]">
-              {formatDateTime(health.auditSummary.lastCheckedAt)}
-            </dd>
-          </div>
-        </dl>
-      </div>
-      <p className="mt-4 rounded-lg border border-current/10 bg-[#05030A]/20 px-3 py-2 text-xs leading-5 text-[#FFF4E8]/50">
-        {health.auditSummary.remoteVerification.reason}
-      </p>
-    </section>
+      {children}
+      <span
+        className={cn(
+          "text-[0.65rem] tabular-nums",
+          active ? "text-[#08030f]/55" : "text-[#FFF4E8]/34",
+        )}
+      >
+        {count.toLocaleString()}
+      </span>
+    </button>
   );
 }
 
-function AuditFindingCard({
+function FindingRecordChip({
+  record,
+  selected,
+  onSelect,
+}: {
+  record: CollectionRecord;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      title={recordMeta(record)}
+      aria-label={`${record.title} by ${record.artist}`}
+      className={cn(
+        "inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition",
+        selected
+          ? "bg-[#FFF4E8] text-[#08030f]"
+          : "bg-[#FFF4E8]/8 text-[#FFF4E8]/66 hover:bg-[#FFF4E8]/14 hover:text-[#FFF4E8]",
+      )}
+    >
+      <span className="max-w-[14rem] truncate">{record.title}</span>
+    </button>
+  );
+}
+
+function FindingRow({
   finding,
   selectedRecord,
   onSelectRecord,
@@ -347,108 +336,76 @@ function AuditFindingCard({
   const isSelected = finding.records.some(
     (record) => selectedRecord?.collectionId === record.id,
   );
-  const actionIcon =
+  const ActionIcon =
     finding.type === "multiple_versions_master" ? GitCompare : ArrowRight;
-  const ActionIcon = actionIcon;
+  const visibleRecords = finding.records.slice(0, VISIBLE_RECORDS_PER_FINDING);
+  const hiddenRecordCount = finding.records.length - visibleRecords.length;
 
   return (
     <article
-      className={`rounded-2xl border p-4 ${
-        isSelected
-          ? "border-[#FFF4E8]/24 bg-[#FFF4E8]/9"
-          : "border-[#FFF4E8]/10 bg-[#101014]"
-      }`}
+      className={cn(
+        "rounded-2xl px-4 py-4 transition sm:px-5",
+        isSelected ? "bg-[#FFF4E8]/10" : "bg-[#FFF4E8]/4",
+      )}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-full border px-2.5 py-1 text-xs ${getSeverityTone(
-                finding.severity,
-              )}`}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <LabelBadge
+              size="xs"
+              tone={getSeverityPillTone(finding.severity)}
             >
               {COLLECTION_AUDIT_SEVERITY_LABELS[finding.severity]}
-            </span>
-            <span className="rounded-full border border-[#FFF4E8]/10 bg-[#FFF4E8]/6 px-2.5 py-1 text-xs text-[#FFF4E8]/56">
+            </LabelBadge>
+            <span className="text-xs text-[#FFF4E8]/42">
               {COLLECTION_AUDIT_CATEGORY_LABELS[finding.category]}
             </span>
           </div>
-          <h3 className="mt-3 text-lg font-semibold text-[#FFF4E8]">
+
+          <h3 className="mt-2 text-base font-semibold leading-snug text-[#FFF4E8]">
             {finding.title}
           </h3>
-          <p className="mt-2 text-sm leading-6 text-[#FFF4E8]/60">
+          <p className="mt-1 text-sm leading-6 text-[#FFF4E8]/56">
             {finding.explanation}
           </p>
+          <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#FFF4E8]/40">
+            {finding.evidence.join(" · ")}
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {visibleRecords.map((record) => (
+              <FindingRecordChip
+                key={record.id}
+                record={record}
+                selected={selectedRecord?.collectionId === record.id}
+                onSelect={() => onSelectRecord(record)}
+              />
+            ))}
+            {hiddenRecordCount > 0 ? (
+              <span className="px-1 text-xs text-[#FFF4E8]/42">
+                +{hiddenRecordCount.toLocaleString()} more
+              </span>
+            ) : null}
+          </div>
         </div>
+
         <Button
           type="button"
           onClick={() => firstRecord && onSelectRecord(firstRecord)}
           disabled={!firstRecord}
-          className="rounded-full bg-[#FFF4E8] px-4 text-[#08030f] hover:bg-[#f6dfc9] disabled:opacity-45"
+          aria-label={`${getFindingActionLabel(finding.type)}: ${finding.title}`}
+          variant="outline"
+          className="shrink-0 rounded-full border-transparent bg-[#FFF4E8]/10 px-4 text-xs font-semibold text-[#FFF4E8]/86 hover:bg-[#FFF4E8]/16 hover:text-[#FFF4E8] disabled:opacity-45"
         >
-          <ActionIcon className="size-4" aria-hidden="true" />
-          {finding.suggestedAction}
+          <ActionIcon className="size-3.5" aria-hidden="true" />
+          {getFindingActionLabel(finding.type)}
         </Button>
-      </div>
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
-            Evidence
-          </p>
-          <ul className="mt-2 grid gap-1.5 text-sm leading-6 text-[#FFF4E8]/58">
-            {finding.evidence.map((reason) => (
-              <li key={reason} className="flex gap-2">
-                <span className="mt-2 size-1.5 shrink-0 rounded-full bg-[#FFF4E8]/34" />
-                <span>{reason}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-[#FFF4E8]/42">
-            Affected records
-          </p>
-          <div className="mt-2 grid gap-2">
-            {finding.records.slice(0, 4).map((record) => (
-              <button
-                key={record.id}
-                type="button"
-                onClick={() => onSelectRecord(record)}
-                className={`rounded-lg px-3 py-2 text-left transition ${
-                  selectedRecord?.collectionId === record.id
-                    ? "bg-[#FFF4E8]/12"
-                    : "bg-[#FFF4E8]/5 hover:bg-[#FFF4E8]/8"
-                }`}
-              >
-                <span className="block truncate text-sm font-medium text-[#FFF4E8]">
-                  {record.title}
-                </span>
-                <span className="mt-1 block truncate text-xs text-[#FFF4E8]/48">
-                  {record.artist} · Discogs #{record.discogsReleaseId}
-                </span>
-                {formatRecordIssueMeta(record) ? (
-                  <span className="mt-1 block truncate text-xs text-[#FFF4E8]/42">
-                    {formatRecordIssueMeta(record)}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-            {finding.records.length > 4 ? (
-              <p className="text-xs text-[#FFF4E8]/42">
-                +{(finding.records.length - 4).toLocaleString()} more affected
-                records. Use the action above or filters in Collection to review
-                the full set.
-              </p>
-            ) : null}
-          </div>
-        </div>
       </div>
     </article>
   );
 }
 
-function RecordRow({
+function InsightRecordRow({
   record,
   meta,
   selectedRecord,
@@ -462,94 +419,52 @@ function RecordRow({
   const isSelected = selectedRecord?.collectionId === record.id;
 
   return (
-    <li>
-      <button
-        type="button"
-        onClick={() => onSelectRecord(record)}
-        className={`flex w-full items-start justify-between gap-4 rounded-lg px-3 py-3 text-left transition ${
-          isSelected
-            ? "bg-[#FFF4E8]/10"
-            : "bg-[#FFF4E8]/5 hover:bg-[#FFF4E8]/8"
-        }`}
-      >
+    <button
+      type="button"
+      onClick={() => onSelectRecord(record)}
+      className={cn(
+        "-mx-2 flex w-full items-start justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition",
+        isSelected ? "bg-[#FFF4E8]/10" : "hover:bg-[#FFF4E8]/6",
+      )}
+    >
       <span className="min-w-0">
-        <span className="block truncate text-sm font-medium text-[#FFF4E8]">
+        <span className="block truncate text-sm text-[#FFF4E8]/86">
           {record.title}
         </span>
-        <span className="mt-1 block truncate text-xs text-[#FFF4E8]/50">
+        <span className="mt-0.5 block truncate text-xs text-[#FFF4E8]/42">
           {record.artist}
         </span>
       </span>
-      <span className="shrink-0 text-right text-xs text-[#FFF4E8]/48">
-        {meta}
-      </span>
-      </button>
-    </li>
+      <span className="shrink-0 pt-0.5 text-xs text-[#FFF4E8]/42">{meta}</span>
+    </button>
   );
 }
 
-function DuplicateRow({
-  group,
-  selectedRecord,
-  onSelectRecord,
-}: {
-  group: DuplicateRecordGroup;
-  selectedRecord: SelectedRecord | null;
-  onSelectRecord: (record: CollectionRecord) => void;
-}) {
-  const firstRecord = group.records[0];
-  const isSelected = firstRecord
-    ? selectedRecord?.collectionId === firstRecord.id
-    : false;
-
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => firstRecord && onSelectRecord(firstRecord)}
-        className={`w-full rounded-lg px-3 py-3 text-left transition ${
-          isSelected
-            ? "bg-[#FFF4E8]/10"
-            : "bg-[#FFF4E8]/5 hover:bg-[#FFF4E8]/8"
-        }`}
-      >
-      <div className="flex items-start justify-between gap-4">
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-[#FFF4E8]">
-            {group.title}
-          </span>
-          <span className="mt-1 block truncate text-xs text-[#FFF4E8]/50">
-            {group.artist} · Discogs #{group.releaseId}
-          </span>
-        </span>
-        <span className="rounded-full border border-[#F08A4B]/18 bg-[#F08A4B]/10 px-2.5 py-1 text-xs text-[#FFD4B5]">
-          {group.records.length} copies
-        </span>
-      </div>
-      </button>
-    </li>
-  );
-}
-
-function InsightPanel({
+function InsightColumn({
   title,
-  eyebrow,
   icon: Icon,
+  count,
   children,
 }: {
   title: string;
-  eyebrow: string;
   icon: LucideIcon;
+  count: number;
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-[#FFF4E8]/10 bg-[#101014] p-4">
-      <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-        <Icon className="size-4" aria-hidden="true" />
-        <p className="text-xs uppercase tracking-[0.22em]">{eyebrow}</p>
+    <section className="min-w-0">
+      <span
+        className="block h-px w-full bg-[#FFF4E8]/10"
+        aria-hidden="true"
+      />
+      <div className="mt-3 flex items-center gap-2">
+        <Icon className="size-4 text-[#FFF4E8]/42" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-[#FFF4E8]/86">{title}</h3>
+        <span className="ml-auto text-xs tabular-nums text-[#FFF4E8]/38">
+          {count.toLocaleString()}
+        </span>
       </div>
-      <h2 className="mt-3 text-lg font-semibold text-[#FFF4E8]">{title}</h2>
-      <div className="mt-4">{children}</div>
+      <div className="mt-2 grid gap-0.5">{children}</div>
     </section>
   );
 }
@@ -557,9 +472,11 @@ function InsightPanel({
 export function HealthWorkspaceFrame({
   selectedRecord,
   onSelectRecord,
+  showRestrictedData = false,
 }: {
   selectedRecord: SelectedRecord | null;
   onSelectRecord: (record: SelectedRecord | null) => void;
+  showRestrictedData?: boolean;
 }) {
   const [records, setRecords] = useState<CollectionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -570,9 +487,12 @@ export function HealthWorkspaceFrame({
   const [severityFilter, setSeverityFilter] =
     useState<"all" | CollectionAuditSeverity>("all");
   const health = useMemo(() => buildCollectionHealth(records), [records]);
-  const missingLocationFinding = health.auditFindings.find(
-    (finding) => finding.type === "missing_shelf_location",
-  );
+  const stateCopy = getHealthStateCopy(health.auditSummary.healthState);
+  const StateIcon = stateCopy.icon;
+  const missingLocationCount =
+    health.auditFindings.find(
+      (finding) => finding.type === "missing_shelf_location",
+    )?.records.length ?? 0;
   const filteredFindings = useMemo(
     () =>
       health.auditFindings.filter((finding) => {
@@ -584,6 +504,7 @@ export function HealthWorkspaceFrame({
       }),
     [health.auditFindings, severityFilter, typeFilter],
   );
+  const hasActiveFilter = typeFilter !== "all" || severityFilter !== "all";
 
   useEffect(() => {
     let isMounted = true;
@@ -595,7 +516,10 @@ export function HealthWorkspaceFrame({
       try {
         const response = await fetch("/api/collection");
         const payload = await readCollectionResponse(response);
-        const nextRecords = normalizeCollectionRecords(payload?.records);
+        const nextRecords = normalizeCollectionRecords(
+          payload?.records,
+          showRestrictedData,
+        );
 
         if (!isMounted) {
           return;
@@ -604,12 +528,12 @@ export function HealthWorkspaceFrame({
         setRecords(nextRecords);
         setIsUsingCache(false);
         writeCollectionCache(nextRecords);
-      } catch (error) {
+      } catch (caught) {
         if (!isMounted) {
           return;
         }
 
-        const cachedRecords = readCollectionCache();
+        const cachedRecords = readCollectionCache(showRestrictedData);
 
         if (cachedRecords.length > 0) {
           setRecords(cachedRecords);
@@ -617,8 +541,8 @@ export function HealthWorkspaceFrame({
         }
 
         setError(
-          error instanceof Error
-            ? error.message
+          caught instanceof Error
+            ? caught.message
             : "Collection health could not be loaded.",
         );
       } finally {
@@ -633,105 +557,198 @@ export function HealthWorkspaceFrame({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [showRestrictedData]);
+
+  const selectRecord = (record: CollectionRecord) =>
+    onSelectRecord(selectedRecordFromCollection(record));
 
   return (
     <section className="min-w-0 py-1" aria-label="Collection health">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-          <BarChart3 className="size-4" aria-hidden="true" />
-          <p className="text-xs uppercase tracking-[0.24em]">
-            Collection health
+      {error && records.length > 0 ? (
+        <div className="mb-4 rounded-xl bg-[#F08A4B]/8 px-4 py-3 text-sm leading-6 text-[#FFD4B5]">
+          <p className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="size-4" aria-hidden="true" />
+            {isUsingCache ? "Using saved collection data" : "Health is unavailable"}
           </p>
+          <p className="mt-1 text-[#FFF4E8]/56">{error}</p>
         </div>
-        <Button
-          asChild
-          className="rounded-full bg-[#FFF4E8] px-5 text-[#08030f] hover:bg-[#f6dfc9]"
-        >
-          <Link href="/app?view=collection">
-            <Search className="size-4" aria-hidden="true" />
-            Open collection
-          </Link>
-        </Button>
-      </div>
+      ) : null}
 
       {isLoading ? (
-        <div className="grid min-h-[30rem] place-items-center rounded-2xl border border-[#FFF4E8]/10 bg-[#101014]">
+        <div className="grid min-h-[30rem] place-items-center">
           <p className="flex items-center gap-3 text-sm text-[#FFF4E8]/58">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             Reading collection health
           </p>
         </div>
+      ) : records.length === 0 ? (
+        <div className="grid min-h-[30rem] place-items-center rounded-2xl bg-[#FFF4E8]/4 px-6 text-center">
+          <div>
+            {error ? (
+              <>
+                <AlertTriangle
+                  className="mx-auto size-8 text-[#F08A4B]/60"
+                  aria-hidden="true"
+                />
+                <p className="mt-4 text-sm font-medium text-[#FFF4E8]/72">
+                  Health could not be checked
+                </p>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/45">
+                  {error}
+                </p>
+                <Button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="mt-5 rounded-full bg-[#FFF4E8] px-5 text-[#08030f] hover:bg-[#f6dfc9]"
+                >
+                  Try again
+                </Button>
+              </>
+            ) : (
+              <>
+                <Disc3
+                  className="mx-auto size-8 text-[#FFF4E8]/28"
+                  aria-hidden="true"
+                />
+                <p className="mt-4 text-sm font-medium text-[#FFF4E8]/72">
+                  No collection to check yet
+                </p>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#FFF4E8]/45">
+                  Mark a few albums owned or wanted from a crate, then come back.
+                </p>
+                <Button
+                  asChild
+                  className="mt-5 rounded-full bg-[#FFF4E8] px-5 text-[#08030f] hover:bg-[#f6dfc9]"
+                >
+                  <Link href="/app?view=crate&source=spotify">
+                    <Search className="size-4" aria-hidden="true" />
+                    Build a crate
+                  </Link>
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
       ) : (
-        <div className="grid gap-5">
-          {error ? (
-            <div className="rounded-xl border border-[#F08A4B]/20 bg-[#F08A4B]/8 p-4 text-sm text-[#FFD4B5]">
-              <p className="flex items-center gap-2 font-medium">
-                <AlertTriangle className="size-4" aria-hidden="true" />
-                {isUsingCache ? "Using cached collection data" : "Insights unavailable"}
-              </p>
-              <p className="mt-2 leading-6 text-[#FFF4E8]/56">{error}</p>
-            </div>
-          ) : null}
-
-          <AuditStatePanel health={health} />
-
-          {records.length > 0 ? (
-            <section
-              className="rounded-2xl border border-[#FFF4E8]/10 bg-[#101014] p-4"
-              aria-labelledby="audit-findings-heading"
-            >
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <div className="flex items-center gap-2 text-[#FFF4E8]/48">
-                    <SlidersHorizontal className="size-4" aria-hidden="true" />
-                    <p className="text-xs uppercase tracking-[0.22em]">
-                      Audit findings
-                    </p>
-                  </div>
+        <div className="grid gap-8">
+          <section
+            className={cn("rounded-2xl p-5 sm:p-6", stateCopy.panelClass)}
+            aria-labelledby="health-verdict-heading"
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <span
+                  className={cn(
+                    "grid size-10 shrink-0 place-items-center rounded-full",
+                    stateCopy.iconClass,
+                  )}
+                >
+                  <StateIcon className="size-5" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
                   <h2
-                    id="audit-findings-heading"
-                    className="mt-3 text-lg font-semibold text-[#FFF4E8]"
+                    id="health-verdict-heading"
+                    className="text-2xl font-semibold text-[#FFF4E8]"
                   >
-                    Issues found
+                    {stateCopy.label}
                   </h2>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-[#FFF4E8]/56">
-                    Each finding explains what WAXLIST detected, why it was
-                    surfaced, which records are affected, and the safest next
-                    action.
+                  <p className="mt-1 text-sm leading-6 text-[#FFF4E8]/62">
+                    {stateCopy.body}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-[#FFF4E8]/42">
+                    {pluralize(health.totalRecords, "record")} ·{" "}
+                    {health.ownedCount.toLocaleString()} owned ·{" "}
+                    {health.wantedCount.toLocaleString()} wanted
                   </p>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[24rem]">
-                  <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/56">
-                    Finding type
+              </div>
+
+            </div>
+
+            <div className="mt-6">
+              <span
+                className="block h-px w-full bg-[#FFF4E8]/10"
+                aria-hidden="true"
+              />
+              <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+                <VerdictMetric
+                  label="Findings"
+                  value={health.auditSummary.totalFindings}
+                />
+                <VerdictMetric
+                  label="High attention"
+                  value={
+                    health.auditSummary.countsBySeverity.high_attention
+                  }
+                />
+                <VerdictMetric
+                  label="Duplicate releases"
+                  value={health.duplicateGroups.length}
+                />
+                <VerdictMetric label="Unsorted" value={missingLocationCount} />
+              </dl>
+            </div>
+
+            <p className="mt-5 text-xs leading-5 text-[#FFF4E8]/40">
+              Checked {formatDateTime(health.auditSummary.lastCheckedAt)}.{" "}
+              {health.auditSummary.remoteVerification.reason}
+            </p>
+          </section>
+
+          {health.auditFindings.length > 0 ? (
+            <section className="min-w-0" aria-labelledby="health-findings-heading">
+              <h2
+                id="health-findings-heading"
+                className="text-lg font-semibold text-[#FFF4E8]"
+              >
+                What needs attention
+              </h2>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div
+                  role="group"
+                  aria-label="Filter findings by severity"
+                  className="flex flex-wrap items-center gap-1.5"
+                >
+                  <SeverityFilterChip
+                    active={severityFilter === "all"}
+                    count={health.auditSummary.totalFindings}
+                    onClick={() => setSeverityFilter("all")}
+                  >
+                    All
+                  </SeverityFilterChip>
+                  {SEVERITY_FILTER_ORDER.map((severity) => (
+                    <SeverityFilterChip
+                      key={severity}
+                      active={severityFilter === severity}
+                      count={health.auditSummary.countsBySeverity[severity]}
+                      onClick={() => setSeverityFilter(severity)}
+                    >
+                      {COLLECTION_AUDIT_SEVERITY_LABELS[severity]}
+                    </SeverityFilterChip>
+                  ))}
+                </div>
+
+                <div className="ml-auto flex items-center gap-3">
+                  {hasActiveFilter ? (
+                    <span className="text-xs tabular-nums text-[#FFF4E8]/38">
+                      {filteredFindings.length.toLocaleString()} shown
+                    </span>
+                  ) : null}
+                  <label className="flex items-center gap-2 text-xs font-medium text-[#FFF4E8]/50">
+                    <span className="sr-only">Filter findings by type</span>
                     <select
                       value={typeFilter}
                       onChange={(event) =>
                         setTypeFilter(
-                          event.target.value as "all" | CollectionAuditFindingType,
+                          event.target.value as
+                            | "all"
+                            | CollectionAuditFindingType,
                         )
                       }
-                      className="h-10 rounded-lg border border-[#FFF4E8]/14 bg-[#120a1d] px-3 text-sm text-[#FFF4E8] outline-none focus:border-[#FFF4E8]/30"
+                      className="h-8 cursor-pointer rounded-full border border-transparent bg-[#1b1b20] px-3 text-sm text-[#FFF4E8]/78 transition hover:bg-[#24242a] hover:text-[#FFF4E8] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-[#FFF4E8]/30"
                     >
-                      {AUDIT_TYPE_FILTER_OPTIONS.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1.5 text-xs font-medium text-[#FFF4E8]/56">
-                    Severity
-                    <select
-                      value={severityFilter}
-                      onChange={(event) =>
-                        setSeverityFilter(
-                          event.target.value as "all" | CollectionAuditSeverity,
-                        )
-                      }
-                      className="h-10 rounded-lg border border-[#FFF4E8]/14 bg-[#120a1d] px-3 text-sm text-[#FFF4E8] outline-none focus:border-[#FFF4E8]/30"
-                    >
-                      {AUDIT_SEVERITY_FILTER_OPTIONS.map((option) => (
+                      {TYPE_FILTER_OPTIONS.map((option) => (
                         <option key={option.id} value={option.id}>
                           {option.label}
                         </option>
@@ -741,221 +758,119 @@ export function HealthWorkspaceFrame({
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3">
+              <div className="mt-4 grid gap-2">
                 {filteredFindings.length > 0 ? (
                   filteredFindings.map((finding) => (
-                    <AuditFindingCard
+                    <FindingRow
                       key={finding.id}
                       finding={finding}
                       selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
+                      onSelectRecord={selectRecord}
                     />
                   ))
-                ) : health.auditFindings.length > 0 ? (
-                  <EmptyState
-                    title="No findings match the current filters"
-                    body="Reset the finding type or severity filter to review the rest of the audit."
-                  />
                 ) : (
-                  <EmptyState
-                    title="No integrity issues found"
-                    body="The local checks currently available did not find duplicate release groups, multiple versions, missing condition data, missing shelf locations, or incomplete core metadata."
-                  />
+                  <div className="rounded-2xl bg-[#FFF4E8]/4 px-4 py-6 text-center">
+                    <p className="text-sm font-medium text-[#FFF4E8]/72">
+                      No findings match these filters
+                    </p>
+                    <p className="mt-1 text-sm text-[#FFF4E8]/45">
+                      Clear a filter to see the rest of the audit.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setTypeFilter("all");
+                        setSeverityFilter("all");
+                      }}
+                      className="mt-3 rounded-full text-[#FFF4E8]/72 hover:bg-[#FFF4E8]/10 hover:text-[#FFF4E8]"
+                    >
+                      Clear filters
+                    </Button>
+                  </div>
                 )}
               </div>
             </section>
           ) : null}
 
-          <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="Owned"
-              value={health.ownedCount}
-              hint="Records available for duplicate, shelf, and value checks."
-            />
-            <MetricCard
-              label="Wanted"
-              value={health.wantedCount}
-              hint="Buying-intent records that can expose artist gaps."
-            />
-            <MetricCard
-              label="Duplicates"
-              value={health.duplicateGroups.length}
-              hint="Owned Discogs releases with more than one copy."
-            />
-            <MetricCard
-              label="Missing location"
-              value={missingLocationFinding?.records.length ?? 0}
-              hint="Owned records without room, unit, shelf, or slot."
-            />
-          </dl>
-
-          {records.length === 0 ? (
-            <EmptyState
-              title="No collection data yet"
-              body="Import Discogs records or seed saved wishlist records before the health dashboard can produce useful signals."
-              href="/app?view=collection"
-              cta="Start collection import"
-            />
-          ) : null}
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <InsightPanel
-              eyebrow="Duplicate summary"
-              title="Duplicate records"
-              icon={Disc3}
+          <section className="min-w-0" aria-labelledby="health-more-heading">
+            <h2
+              id="health-more-heading"
+              className="text-lg font-semibold text-[#FFF4E8]"
             >
-              {health.duplicateGroups.length > 0 ? (
-                <ul className="grid gap-2">
-                  {health.duplicateGroups.slice(0, 8).map((group) => (
-                    <DuplicateRow
-                      key={group.key}
-                      group={group}
-                      selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState
-                  title="No duplicate copies found"
-                  body="WAXLIST groups owned records by Discogs release id and flags releases with multiple owned copies."
-                />
-              )}
-            </InsightPanel>
+              Worth a look
+            </h2>
 
-            <InsightPanel
-              eyebrow="Highest median"
-              title="High-value records"
-              icon={Trophy}
-            >
-              {health.highValueRecords.length > 0 ? (
-                <ul className="grid gap-2">
-                  {health.highValueRecords.map((record) => (
-                    <RecordRow
-                      key={record.id}
-                      record={record}
-                      meta={formatPrice(record)}
-                      selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState
-                  title="No value data yet"
-                  body="High-value records appear after Discogs import or matching provides price hints."
-                />
-              )}
-            </InsightPanel>
-
-            <InsightPanel
-              eyebrow="Recent adds"
-              title="Recently added"
-              icon={Clock3}
-            >
-              {health.recentlyAddedRecords.length > 0 ? (
-                <ul className="grid gap-2">
-                  {health.recentlyAddedRecords.map((record) => (
-                    <RecordRow
+            <div className="mt-4 grid gap-6 sm:grid-cols-3">
+              <InsightColumn
+                title="Recently added"
+                icon={Clock3}
+                count={health.recentlyAddedRecords.length}
+              >
+                {health.recentlyAddedRecords.length > 0 ? (
+                  health.recentlyAddedRecords.map((record) => (
+                    <InsightRecordRow
                       key={record.id}
                       record={record}
                       meta={formatDate(record.createdAt)}
                       selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
+                      onSelectRecord={selectRecord}
                     />
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState
-                  title="No recent imports"
-                  body="Records added within the recent health window will appear here."
-                />
-              )}
-            </InsightPanel>
+                  ))
+                ) : (
+                  <EmptyInline>No recent additions.</EmptyInline>
+                )}
+              </InsightColumn>
 
-            <InsightPanel
-              eyebrow="Shelf work"
-              title="Missing location"
-              icon={MapPin}
-            >
-              {health.missingLocationRecords.length > 0 ? (
-                <ul className="grid gap-2">
-                  {health.missingLocationRecords.map((record) => (
-                    <RecordRow
-                      key={record.id}
-                      record={record}
-                      meta={formatCollectionLocation(record) || "No shelf set"}
-                      selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState
-                  title="Owned records are located"
-                  body="No owned record is currently missing room, unit, shelf, or slot data."
-                  href="/app?view=shelf"
-                  cta="Open shelf"
-                />
-              )}
-            </InsightPanel>
-          </div>
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <InsightPanel
-              eyebrow="Collection gaps"
-              title="Missing albums from collected artists"
-              icon={Sparkles}
-            >
-              {health.collectedArtistGapRecords.length > 0 ? (
-                <ul className="grid gap-2">
-                  {health.collectedArtistGapRecords.map((record) => (
-                    <RecordRow
+              <InsightColumn
+                title="From artists you collect"
+                icon={Sparkles}
+                count={health.collectedArtistGapRecords.length}
+              >
+                {health.collectedArtistGapRecords.length > 0 ? (
+                  health.collectedArtistGapRecords.map((record) => (
+                    <InsightRecordRow
                       key={record.id}
                       record={record}
                       meta="Wanted"
                       selectedRecord={selectedRecord}
-                      onSelectRecord={(record) =>
-                        onSelectRecord(selectedRecordFromCollection(record))
-                      }
+                      onSelectRecord={selectRecord}
                     />
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState
-                  title="No collected-artist gaps found"
-                  body="Wanted records by artists already in your owned collection will appear here as missing shelf targets."
-                />
-              )}
-            </InsightPanel>
+                  ))
+                ) : (
+                  <EmptyInline>
+                    No wanted albums from artists already on your shelf.
+                  </EmptyInline>
+                )}
+              </InsightColumn>
 
-            <InsightPanel
-              eyebrow="Spotify inference"
-              title="Listening freshness"
-              icon={BarChart3}
-            >
-              <div className="grid gap-3">
-                <EmptyState
-                  title="Not-recently-listened is gated"
-                  body={health.listeningRecency.reason}
-                />
-                <EmptyState
-                  title="Streamed-artist gaps need history"
-                  body={health.streamedArtistGaps.reason}
-                />
-              </div>
-            </InsightPanel>
-          </div>
+              {showRestrictedData ? (
+                <InsightColumn
+                  title="High-value records"
+                  icon={Trophy}
+                  count={health.highValueRecords.length}
+                >
+                  {health.highValueRecords.length > 0 ? (
+                    health.highValueRecords.map((record) => (
+                      <InsightRecordRow
+                        key={record.id}
+                        record={record}
+                        meta={formatPrice(record)}
+                        selectedRecord={selectedRecord}
+                        onSelectRecord={selectRecord}
+                      />
+                    ))
+                  ) : (
+                    <EmptyInline>No value data on these records yet.</EmptyInline>
+                  )}
+                </InsightColumn>
+              ) : null}
+            </div>
+
+            <p className="mt-5 text-xs leading-5 text-[#FFF4E8]/38">
+              {health.listeningRecency.reason}
+            </p>
+          </section>
         </div>
       )}
     </section>

@@ -96,8 +96,8 @@ export const apiCacheKeys = {
   discogsSearch(normalizedArtist: string, normalizedAlbum: string) {
     return `discogs:search:${normalizedArtist}:${normalizedAlbum}`;
   },
-  discogsMarketplace(releaseId: number) {
-    return `discogs:marketplace:${releaseId}`;
+  discogsMarketplace(releaseId: number, currency = "GBP") {
+    return `discogs:marketplace:${releaseId}:${currency}`;
   },
   discogsMarketplaceListings(releaseId: number, page: number, perPage: number) {
     return `discogs:marketplace:${releaseId}:listings:${page}:${perPage}`;

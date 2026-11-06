@@ -76,7 +76,7 @@ export const COLLECTION_AUDIT_TYPE_LABELS = {
   multiple_versions_master: "Multiple versions",
   missing_media_condition: "Missing media condition",
   missing_sleeve_condition: "Missing sleeve condition",
-  missing_shelf_location: "Missing shelf location",
+  missing_shelf_location: "Unsorted",
   incomplete_release_metadata: "Incomplete metadata",
 } as const satisfies Record<CollectionAuditFindingType, string>;
 
@@ -324,7 +324,7 @@ export function detectExactDuplicateReleases(
       records: group.records,
       title: `${group.records.length.toLocaleString()} copies of the same exact release`,
       explanation:
-        "These owned records point at the same Discogs release. That may be intentional, so WAXLIST is surfacing the copies for review instead of treating them as an error.",
+        "These copies point at the same Discogs release. That can be deliberate, so they're here for a look, not flagged as a mistake.",
       evidence: [
         `Same Discogs release id: ${group.releaseId}`,
         `Affected records: ${pluralize(group.records.length, "copy", "copies")}`,
@@ -372,7 +372,7 @@ export function detectMultipleVersionsOfMaster(
           records: groupRecords,
           title: "Multiple versions of the same album",
           explanation:
-            "These owned records belong to the same Discogs master release but are saved as different exact releases. This can be intentional, such as an original pressing plus a reissue.",
+            "Same album, different pressings. That may be exactly what you want, like an original plus a reissue.",
           evidence: [
             `Discogs master id: ${masterId}`,
             `Different release ids: ${releaseIds.join(", ")}`,
@@ -410,7 +410,7 @@ export function detectMissingConditionFindings(
         records: mediaRecords,
         title: `${pluralize(mediaRecords.length, "record")} missing media condition`,
         explanation:
-          "Media condition has not been recorded on these owned records. WAXLIST can show the affected records, but it will not guess or write condition values automatically.",
+          "No media condition recorded. WAXLIST won't guess one for you.",
         evidence: [
           "The stored media condition field is blank.",
           `Affected records: ${pluralize(mediaRecords.length, "record")}`,
@@ -432,7 +432,7 @@ export function detectMissingConditionFindings(
         records: sleeveRecords,
         title: `${pluralize(sleeveRecords.length, "record")} missing sleeve condition`,
         explanation:
-          "Sleeve condition has not been recorded on these owned records. The audit groups them so the collection can be reviewed without producing one card per record.",
+          "No sleeve condition recorded. They're grouped here so the list stays readable.",
         evidence: [
           "The stored sleeve condition field is blank.",
           `Affected records: ${pluralize(sleeveRecords.length, "record")}`,
@@ -466,15 +466,15 @@ export function detectMissingLocationFinding(
           severity: "informational",
           key: "shelf-location",
           records: locationRecords,
-          title: `${pluralize(locationRecords.length, "record")} not assigned to a shelf`,
+          title: `${pluralize(locationRecords.length, "record")} with no group`,
           explanation:
-            "These owned records do not have room, unit, shelf, or slot data. This is useful shelf work, not a destructive cleanup task.",
+            "Give each owned record a group so the shelving can file it where you expect to find it.",
           evidence: [
-            "Room, unit, shelf, and slot are all blank.",
+            "No group yet.",
             `Affected records: ${pluralize(locationRecords.length, "record")}`,
           ],
-          suggestedAction: "Assign shelf location",
-          actionHref: "/app?view=shelf",
+          suggestedAction: "Group records",
+          actionHref: "/app?view=collection#shelving",
           detectedAt,
         }),
       ]
@@ -511,7 +511,7 @@ export function detectIncompleteMetadataFinding(
       records: incompleteRecords,
       title: `${pluralize(incompleteRecords.length, "record")} missing release metadata`,
       explanation:
-        "Some optional release metadata is blank. WAXLIST can still use these records, but search, comparison, and identification flows work better when label, catalogue number, and year are present.",
+        "A few optional fields are blank. Search and comparison work better with label, catalogue number, and year filled in.",
       evidence: Array.from(fieldCounts.entries()).map(
         ([field, count]) => `${pluralize(count, "record")} missing ${field}`,
       ),
@@ -582,7 +582,7 @@ function buildCollectionAuditSummary(
     remoteVerification: {
       status: "not_started",
       reason:
-        "This MVP runs local checks from the currently loaded collection. Remote Discogs release verification is deferred to a bounded follow-up pass.",
+        "Local checks on the loaded collection; remote Discogs verification isn't available yet.",
     },
   };
 }
@@ -664,7 +664,7 @@ export function buildCollectionHealth(
     listeningRecency: {
       status: "unavailable",
       reason:
-        "Spotify listening timestamps are not persisted with collection records yet.",
+        "Not-recently-played gaps need saved Spotify listening history, which WAXLIST doesn't store yet.",
     },
     streamedArtistGaps: {
       status: "unavailable",

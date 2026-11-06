@@ -1,3 +1,4 @@
+import type { RecordPriceSummary } from "@/lib/collection/pricing";
 import type { CollectionRecord } from "@/lib/collection/record";
 import {
   createUnknownPriceBreakdown,
@@ -27,14 +28,18 @@ export type SelectedRecord = {
   imageUrl: string | null;
   mediaCondition: string | null;
   sleeveCondition: string | null;
+  rating: number | null;
+  favourite: boolean;
   status: SelectedRecordStatus;
   tags: string[];
   notes: string | null;
-  room: string | null;
+  group: string | null;
   unit: string | null;
   shelf: string | null;
   slot: string | null;
   priceHintLabel: string | null;
+  /** Latest dated value for a collection record, when one is recorded. */
+  pricing: RecordPriceSummary | null;
   discogsUri: string | null;
   sourceContext: string | null;
   savedAt: string | null;
@@ -44,7 +49,15 @@ export type SelectedRecord = {
 export type SelectedRecordPatch = Partial<
   Pick<
     SelectedRecord,
-    "status" | "tags" | "notes" | "room" | "unit" | "shelf" | "slot"
+    | "status"
+    | "rating"
+    | "favourite"
+    | "tags"
+    | "notes"
+    | "group"
+    | "unit"
+    | "shelf"
+    | "slot"
   >
 >;
 
@@ -88,14 +101,17 @@ export function selectedRecordFromCollection(
     imageUrl: record.imageUrl,
     mediaCondition: record.mediaCondition,
     sleeveCondition: record.sleeveCondition,
+    rating: record.rating,
+    favourite: record.favourite,
     status: record.status,
     tags: record.tags,
     notes: record.notes,
-    room: record.room,
+    group: record.group,
     unit: record.unit,
     shelf: record.shelf,
     slot: record.slot,
     priceHintLabel: record.priceHintLabel,
+    pricing: record.pricing ?? null,
     discogsUri: `https://www.discogs.com/release/${record.discogsReleaseId}`,
     sourceContext: record.syncedAt ? `Synced ${record.syncedAt}` : null,
     savedAt: null,
@@ -123,16 +139,19 @@ export function selectedRecordFromWishlist(
     imageUrl: record.thumb,
     mediaCondition: null,
     sleeveCondition: null,
+    rating: null,
+    favourite: false,
     status: "wanted",
     tags: record.buyingControls.tags,
     notes: record.buyingControls.ignoredListingNote,
-    room: null,
+    group: null,
     unit: null,
     shelf: null,
     slot: null,
     priceHintLabel: record.priceLabel,
+    pricing: null,
     discogsUri: record.discogsUri,
-    sourceContext: `${record.spotifyArtist} - ${record.spotifyAlbum}`,
+    sourceContext: `${record.sourceArtist} - ${record.sourceAlbum}`,
     savedAt: record.savedAt,
     wishlistRecord: record,
   };
@@ -158,14 +177,17 @@ export function selectedRecordFromCrate(
     imageUrl: record.imageUrl ?? null,
     mediaCondition: record.mediaCondition ?? null,
     sleeveCondition: record.sleeveCondition ?? null,
+    rating: null,
+    favourite: false,
     status: record.wishlistRecord ? "wanted" : null,
     tags: record.wishlistRecord?.buyingControls.tags ?? [],
     notes: record.wishlistRecord?.buyingControls.ignoredListingNote ?? null,
-    room: null,
+    group: null,
     unit: null,
     shelf: null,
     slot: null,
     priceHintLabel: record.priceHintLabel ?? null,
+    pricing: null,
     discogsUri: record.discogsUri ?? null,
     sourceContext: record.sourceContext ?? null,
     savedAt: record.wishlistRecord?.savedAt ?? null,
@@ -190,10 +212,11 @@ export function createWishlistRecordFromSelected(
   return {
     id: record.wishlistId ?? `discogs:${record.discogsReleaseId}`,
     savedAt: record.savedAt ?? new Date().toISOString(),
-    spotifyAlbum: record.sourceContext ?? record.title,
-    spotifyArtist: record.artist,
-    spotifyAlbumId: null,
-    spotifyAlbumUrl: null,
+    sourceProvider: "listenbrainz",
+    sourceAlbum: record.sourceContext ?? record.title,
+    sourceArtist: record.artist,
+    sourceAlbumId: null,
+    sourceAlbumUrl: null,
     discogsReleaseId: record.discogsReleaseId,
     discogsTitle: record.title,
     discogsArtist: record.artist,
