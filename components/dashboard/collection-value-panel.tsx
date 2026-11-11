@@ -207,7 +207,7 @@ export function CollectionValuePanel({
             <p className="mt-3 max-w-xl text-sm leading-6 text-[#FFF4E8]/52">
               Prices appear here for every vinyl you value, owned or wanted.
               Open a vinyl in Collection and fetch its Discogs price, or save a
-              value by hand. Each check becomes a blip on its price movement.
+              value by hand. Every check adds a blip to the graph.
             </p>
           )}
         </div>

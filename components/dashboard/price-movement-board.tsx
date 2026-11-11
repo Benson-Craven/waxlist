@@ -156,7 +156,7 @@ function MovementRow({
                 movement.currency,
               )}`}
               aria-hidden="true"
-              className="absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#FFF4E8]/55 bg-[#08030f]"
+              className="absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#08030f] shadow-[0_0_0_1px_rgba(255,244,232,0.6)]"
               style={{ left: `${previous}%` }}
             />
           </>
@@ -312,7 +312,7 @@ export function PriceMovementBoard({
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden="true"
-            className="size-2 rounded-full border border-[#FFF4E8]/55"
+            className="size-2 rounded-full bg-[#08030f] shadow-[0_0_0_1px_rgba(255,244,232,0.6)]"
           />
           Previous check
         </span>
